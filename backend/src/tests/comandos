@@ -1,0 +1,12 @@
+resetar banco
+npm run reset-db
+inserir dados simulados
+npm run seed-test
+test sqlinjection
+node src/tests/sqlInjection.test.js
+teste de estresse
+node src/tests/stress-multi-login.test.js
+mostrar registros do banco
+node src/tests/mostrar-banco.test.js
+
+rm -rf node_modules package-lock.json

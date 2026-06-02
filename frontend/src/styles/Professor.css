@@ -1,0 +1,83 @@
+:root {
+  --prof-bg: #f6f4ef;
+  --prof-surface: #fffdfa;
+  --prof-surface-soft: #f8f6f1;
+  --prof-border: #e4ded2;
+  --prof-border-strong: #d6cbbb;
+  --prof-text: #1f2933;
+  --prof-muted: #68717f;
+  --prof-primary: #3f6f78;
+  --prof-primary-strong: #335e66;
+  --prof-primary-soft: #e6f0f1;
+  --prof-green: #3d8462;
+  --prof-green-soft: #e6f4ec;
+  --prof-red: #b85c5c;
+  --prof-red-soft: #f8e8e6;
+  --prof-shadow: 0 10px 26px rgba(45, 55, 72, 0.08);
+  --prof-radius: 18px;
+  --prof-touch: 48px;
+}
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; min-width: 0; overflow-x: hidden; }
+button, input, select { font: inherit; }
+button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.professor-page { min-height: 100vh; width: 100%; max-width: 100vw; overflow-x: hidden; background: linear-gradient(180deg, #f7f5f0 0%, var(--prof-bg) 100%); color: var(--prof-text); font-family: Inter, Arial, Helvetica, sans-serif; }
+.professor-header { width: 100%; background: rgba(255,253,250,.94); border-bottom: 1px solid var(--prof-border); padding: max(12px, env(safe-area-inset-top)) 14px 12px; position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px); }
+.professor-user-info { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.professor-user-info h1 { margin: 0; max-width: 52vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: clamp(1rem, 4vw, 1.18rem); line-height: 1.2; font-weight: 800; letter-spacing: -.02em; }
+.professor-user-info p { margin: 4px 0 0; font-size: .86rem; color: var(--prof-muted); }
+.professor-profile-block { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.professor-avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--prof-primary-soft); color: var(--prof-primary-strong); display: flex; align-items: center; justify-content: center; font-weight: 900; flex-shrink: 0; }
+.professor-actions-block { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; flex-shrink: 0; }
+.config-button, .logout-button, .editar-chamada-button, .status-button, .salvar-chamada-button, .save-config-button, .modal-header button { min-height: var(--prof-touch); border-radius: 14px; border: 1px solid transparent; cursor: pointer; transition: transform .12s ease, background-color .12s ease, border-color .12s ease, opacity .12s ease; }
+.config-button:active, .logout-button:active, .editar-chamada-button:active, .status-button:active, .salvar-chamada-button:active, .save-config-button:active, .modal-header button:active { transform: scale(.98); }
+.config-button { width: var(--prof-touch); height: var(--prof-touch); border-radius: 16px; background: var(--prof-surface-soft); border-color: var(--prof-border); color: var(--prof-text); font-size: 1.08rem; }
+.logout-button { min-height: var(--prof-touch); margin: 0; padding: 0 14px; background: var(--prof-surface-soft); border-color: var(--prof-border); color: var(--prof-muted); font-size: .92rem; font-weight: 800; }
+.config-button:hover, .logout-button:hover, .editar-chamada-button:hover, .status-button:hover, .save-config-button:hover, .salvar-chamada-button:hover { filter: brightness(.98); }
+.professor-content { width: 100%; max-width: 100vw; padding: 14px 12px calc(104px + env(safe-area-inset-bottom)); }
+.turma-select-area { width: 100%; margin-bottom: 14px; }
+.turma-select-area label, .config-form label { display: block; margin-bottom: 7px; font-size: .92rem; font-weight: 800; color: var(--prof-muted); }
+.disciplina-input, .turma-select-area select, .config-form input { width: 100%; min-height: 52px; border: 1px solid var(--prof-border); border-radius: 16px; background: var(--prof-surface); color: var(--prof-text); padding: 0 14px; font-size: 1rem; font-weight: 700; outline: none; box-shadow: 0 1px 0 rgba(255,255,255,.7) inset; }
+.disciplina-input:focus, .turma-select-area select:focus, .config-form input:focus { border-color: var(--prof-primary); box-shadow: 0 0 0 4px rgba(63,111,120,.12); }
+.empty-state { min-height: 150px; border: 1px dashed var(--prof-border-strong); border-radius: var(--prof-radius); background: rgba(255,253,250,.84); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; text-align: center; padding: 18px; color: var(--prof-muted); }
+.empty-state strong { color: var(--prof-text); font-size: 1.03rem; }
+.atraso-info-card { min-height: auto; align-items: flex-start; text-align: left; margin-bottom: 14px; background: var(--prof-primary-soft); border-style: solid; border-color: rgba(63,111,120,.18); }
+.chamada-title { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 6px 2px 10px; }
+.chamada-title h2 { margin: 0; font-size: clamp(1.04rem, 4vw, 1.18rem); letter-spacing: -.01em; }
+.chamada-title span { color: var(--prof-muted); font-size: .88rem; white-space: nowrap; }
+.alunos-lista { list-style: none; padding: 0; margin: 0; background: var(--prof-surface); border: 1px solid var(--prof-border); border-radius: var(--prof-radius); overflow: hidden; box-shadow: var(--prof-shadow); }
+.aluno-linha { width: 100%; min-height: 84px; padding: 12px; border-bottom: 1px solid var(--prof-border); display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--prof-surface); }
+.aluno-linha:last-child { border-bottom: 0; }
+.aluno-nome { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 1rem; font-weight: 800; line-height: 1.35; }
+.presenca-toggle { display: flex; gap: 8px; flex-shrink: 0; }
+.status-button { min-width: 88px; padding: 0 12px; background: var(--prof-surface-soft); border-color: var(--prof-border); color: var(--prof-muted); font-size: .88rem; font-weight: 900; }
+.status-button.presente.ativo { background: var(--prof-green-soft); border-color: rgba(61,132,98,.38); color: var(--prof-green); }
+.status-button.ausente.ativo { background: var(--prof-red-soft); border-color: rgba(184,92,92,.38); color: var(--prof-red); }
+.salvar-area { position: fixed; left: 0; right: 0; bottom: 0; display: grid; gap: 10px; padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); background: rgba(246,244,239,.94); backdrop-filter: blur(12px); border-top: 1px solid var(--prof-border); z-index: 20; }
+.salvar-chamada-button, .save-config-button, .editar-chamada-button { background: var(--prof-primary); color: #fff; font-size: .96rem; font-weight: 900; padding: 0 16px; }
+.salvar-chamada-button { width: 100%; min-height: 54px; border-radius: 16px; }
+.editar-chamada-button { min-width: 84px; min-height: 46px; background: var(--prof-primary-soft); border-color: rgba(63,111,120,.18); color: var(--prof-primary-strong); }
+.editar-chamada-button:disabled, .salvar-chamada-button:disabled, .save-config-button:disabled { background: #ebe7df; border-color: var(--prof-border); color: #8d96a3; cursor: not-allowed; opacity: .95; }
+.chamadas-historico { margin-top: 20px; }
+.historico-lista { display: grid; gap: 10px; }
+.historico-card { display: grid; grid-template-columns: 1.2fr .8fr 1fr auto; align-items: center; gap: 12px; background: var(--prof-surface); border: 1px solid var(--prof-border); border-radius: var(--prof-radius); padding: 12px; box-shadow: 0 8px 20px rgba(45,55,72,.05); min-width: 0; }
+.historico-card strong, .historico-card span, .historico-card small { display: block; min-width: 0; overflow-wrap: anywhere; }
+.historico-card strong { font-size: .98rem; }
+.historico-card small { color: var(--prof-muted); font-size: .76rem; font-weight: 800; }
+.historico-card span { font-size: .9rem; }
+.historico-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.historico-alunos-atraso { grid-column: 1 / -1; display: grid; gap: 8px; width: 100%; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--prof-border); }
+.historico-aluno-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--prof-border); border-radius: 14px; background: var(--prof-surface-soft); min-width: 0; }
+.historico-aluno-row span { overflow-wrap: anywhere; }
+.historico-aluno-row small { font-weight: 900; color: var(--prof-muted); text-transform: capitalize; }
+.modal-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(31,41,51,.42); display: flex; align-items: flex-end; padding-top: env(safe-area-inset-top); }
+.config-modal { width: 100%; max-height: calc(100vh - env(safe-area-inset-top)); overflow-y: auto; background: var(--prof-surface); border-radius: 24px 24px 0 0; padding: 18px 14px calc(22px + env(safe-area-inset-bottom)); box-shadow: var(--prof-shadow); }
+.modal-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.modal-header h2 { margin: 0; font-size: 1.2rem; }
+.modal-header button { width: var(--prof-touch); height: var(--prof-touch); border-radius: 16px; background: var(--prof-surface-soft); border-color: var(--prof-border); color: var(--prof-text); font-size: 1rem; }
+.config-form { display: flex; flex-direction: column; gap: 12px; }
+.config-form label { display: flex; flex-direction: column; gap: 6px; }
+.save-config-button { width: 100%; min-height: 52px; border-radius: 16px; margin-top: 4px; }
+@media (max-width: 640px) { .professor-header { padding-left: 12px; padding-right: 12px; } .professor-user-info h1 { max-width: 44vw; } .aluno-linha { flex-direction: column; align-items: stretch; } .presenca-toggle { width: 100%; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); } .status-button { width: 100%; min-width: 0; } .historico-card, .historico-aluno-row { grid-template-columns: 1fr; align-items: stretch; } .historico-actions { justify-content: stretch; } .editar-chamada-button { width: 100%; } }
+@media (max-width: 380px) { .professor-content { padding-left: 10px; padding-right: 10px; } .professor-avatar, .config-button, .logout-button { min-height: 44px; } .logout-button { padding: 0 10px; font-size: .86rem; } }
+@media (min-width: 768px) { .professor-page { max-width: 980px; margin: 0 auto; border-left: 1px solid var(--prof-border); border-right: 1px solid var(--prof-border); } .professor-header, .professor-content { padding-left: 24px; padding-right: 24px; } .salvar-area { max-width: 980px; margin: 0 auto; padding-left: 24px; padding-right: 24px; } .config-modal { max-width: 520px; margin: 0 auto; border-radius: 24px 24px 0 0; } }
