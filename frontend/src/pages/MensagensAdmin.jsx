@@ -209,7 +209,7 @@ export default function MensagensAdmin() {
       />
       <div className="admin-title-box">
         <h2>Mensagens</h2>
-        <p>Cadastre os nomes exatos dos grupos do WhatsApp e envie mensagens para eles pela fila da automação.</p>
+        <p>Cadastre os nomes dos grupos do WhatsApp e envie mensagens para eles.</p>
       </div>
 
       {carregando && <p>Carregando grupos do WhatsApp...</p>}
@@ -220,8 +220,7 @@ export default function MensagensAdmin() {
         <div className="admin-title-box mensagens-subtitle-box">
           <h3>Cadastro de grupos do WhatsApp</h3>
           <p>
-            Cadastre o nome visível do grupo. A automação também gera uma busca sem espaços e sem “º/°”.
-            Exemplo pesquisado: “1ano-paisereponsáveis”.
+            Cadastre o nome visível do grupo. O sistema buscará esse nome no WhatsApp Web para enviar as mensagens. Se o nome do grupo for alterado, atualize aqui para manter o envio funcionando.
           </p>
         </div>
 
@@ -231,7 +230,7 @@ export default function MensagensAdmin() {
             <input
               value={formGrupo.nomeGrupo}
               onChange={(event) => setFormGrupo((atual) => ({ ...atual, nomeGrupo: event.target.value }))}
-              placeholder="Ex: 1A Manhã - Pais"
+              placeholder="Ex: 1°A - Pais"
               maxLength={150}
               required
             />
@@ -263,7 +262,7 @@ export default function MensagensAdmin() {
             <div key={grupo.id} className="mensagens-checkbox-item mensagens-grupo-card">
               <strong>{grupo.nomeGrupo}</strong>
               {grupo.nomeGrupoBusca && (
-                <small>Busca usada pelo robô: {grupo.nomeGrupoBusca}</small>
+                <small>Nome usado para busca: {grupo.nomeGrupoBusca}</small>
               )}
               <div className="mensagens-card-actions">
                 <button className="admin-secondary-btn" type="button" onClick={() => editarGrupo(grupo)}>
@@ -281,7 +280,6 @@ export default function MensagensAdmin() {
       <form className="admin-panel mensagens-form" onSubmit={handleEnviar}>
         <div className="admin-title-box mensagens-subtitle-box">
           <h3>Enviar mensagem para grupos do WhatsApp</h3>
-          <p>Este envio não usa telefones dos responsáveis; o robô pesquisará o grupo pelo nome no WhatsApp Web.</p>
         </div>
 
         <div className="mensagens-grid">

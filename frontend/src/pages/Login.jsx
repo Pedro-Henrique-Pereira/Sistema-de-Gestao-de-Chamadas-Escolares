@@ -12,7 +12,25 @@ export default function Login() {
   const [carregandoDev, setCarregandoDev] = useState(false);
 
   const API_BASE = import.meta.env.VITE_API_URL || "http://192.168.0.13:3001";
-  const loginRapidoDevHabilitado = import.meta.env.DEV || import.meta.env.VITE_DEV_LOGIN === "true";
+
+  function hostEhLocalhost(hostname) {
+    return ["localhost", "127.0.0.1", "::1"].includes(hostname);
+  }
+
+  function apiBaseEhLocalhost(apiBase) {
+    try {
+      return hostEhLocalhost(new URL(apiBase).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  const frontendEmLocalhost = hostEhLocalhost(window.location.hostname);
+  const backendEmLocalhost = apiBaseEhLocalhost(API_BASE);
+  const loginRapidoDevHabilitado =
+    frontendEmLocalhost &&
+    backendEmLocalhost &&
+    (import.meta.env.DEV || import.meta.env.VITE_DEV_LOGIN === "true");
 
 
   useEffect(() => {
@@ -267,7 +285,7 @@ export default function Login() {
         {loginRapidoDevHabilitado && usuariosDev.length > 0 && (
           <div className="dev-login-panel">
             <strong>Login rápido de desenvolvimento</strong>
-            <small>Ativo apenas com AUTH_DEV_BYPASS=true ou DEV_LOGIN_ENABLED=true no backend.</small>
+            <small>Disponível somente quando frontend e backend forem acessados por localhost.</small>
 
             <div className="dev-login-list">
               {usuariosDev.map((usuario) => (

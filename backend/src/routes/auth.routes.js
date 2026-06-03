@@ -19,6 +19,6 @@ router.post("/login", loginLimiter, authController.login);
 router.get("/dev-users", authController.listarUsuariosDev);
 router.post("/dev-login", authController.devLogin);
 router.get("/me", autenticar, authController.me);
-router.post("/logout", authController.logout);
+router.post("/logout", autenticar, authController.logout);
 
 module.exports = router;

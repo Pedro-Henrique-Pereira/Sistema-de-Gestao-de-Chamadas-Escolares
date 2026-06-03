@@ -32,10 +32,22 @@ async function configurar(req, res, next) {
       }
 
       const senhaHash = await bcrypt.hash(senha, 10);
-      await db.execute(
-        "UPDATE usuarios SET nome = ?, email = ?, senha_hash = ? WHERE id = ?",
-        [nome, email, senhaHash, usuarioId]
-      );
+      const connection = await db.getConnection();
+
+      try {
+        await connection.beginTransaction();
+        await connection.execute(
+          "UPDATE usuarios SET nome = ?, email = ?, senha_hash = ? WHERE id = ?",
+          [nome, email, senhaHash, usuarioId]
+        );
+        await connection.execute("DELETE FROM sessoes_ativas WHERE usuario_id = ?", [usuarioId]);
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
     } else {
       await db.execute(
         "UPDATE usuarios SET nome = ?, email = ? WHERE id = ?",

@@ -1,5 +1,6 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const Usuario = require("../models/usuarioModel");
 const db = require("../database/connection");
 const { formatarEmail } = require("../utils/formatadores");
@@ -12,8 +13,44 @@ const tokenCookieOptions = {
   path: "/",
 };
 
-function modoDevHabilitado() {
-  return process.env.NODE_ENV === "development" && process.env.AUTH_DEV_BYPASS === "true";
+function valorHostEhLocalhost(valor) {
+  if (!valor) return false;
+
+  const texto = String(valor).trim().toLowerCase();
+
+  if (!texto) return false;
+
+  try {
+    const url = texto.includes("://") ? new URL(texto) : new URL(`http://${texto}`);
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+  } catch {
+    const hostSemPorta = texto
+      .split(",")[0]
+      .replace(/^\[/, "")
+      .replace(/\]$/, "")
+      .split(":")[0];
+
+    return ["localhost", "127.0.0.1", "::1"].includes(hostSemPorta);
+  }
+}
+
+function requisicaoVeioDeLocalhost(req) {
+  const origin = req.get("origin");
+  const referer = req.get("referer");
+  const host = req.get("host");
+
+  if (origin && !valorHostEhLocalhost(origin)) return false;
+  if (referer && !valorHostEhLocalhost(referer)) return false;
+
+  return valorHostEhLocalhost(host) || valorHostEhLocalhost(req.hostname);
+}
+
+function modoDevHabilitado(req) {
+  return (
+    process.env.NODE_ENV === "development" &&
+    (process.env.AUTH_DEV_BYPASS === "true" || process.env.DEV_LOGIN_ENABLED === "true") &&
+    requisicaoVeioDeLocalhost(req)
+  );
 }
 
 function obterJwtSecretSeguro() {
@@ -28,8 +65,50 @@ function obterJwtSecretSeguro() {
   return jwtSecret;
 }
 
-function respostaLoginComCookie(res, usuario, mensagem = "Login realizado com sucesso.") {
-  const token = gerarToken(usuario);
+async function registrarSessaoAtiva(usuarioId, tokenId, dispositivoInfo, expiraEm) {
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    await connection.execute(
+      "SELECT id FROM usuarios WHERE id = ? FOR UPDATE",
+      [usuarioId]
+    );
+
+    await connection.execute("DELETE FROM sessoes_ativas WHERE expira_em <= NOW()");
+
+    await connection.execute(
+      "DELETE FROM sessoes_ativas WHERE usuario_id = ?",
+      [usuarioId]
+    );
+
+    await connection.execute(
+      `INSERT INTO sessoes_ativas (id, usuario_id, token_id, dispositivo_info, criado_em, expira_em)
+       VALUES (?, ?, ?, ?, NOW(), ?)`,
+      [crypto.randomUUID(), usuarioId, tokenId, dispositivoInfo || null, expiraEm]
+    );
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+function calcularExpiracaoSessao() {
+  const expiraEm = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  return expiraEm.toISOString().slice(0, 19).replace("T", " ");
+}
+
+async function respostaLoginComCookie(req, res, usuario, mensagem = "Login realizado com sucesso.") {
+  const tokenId = crypto.randomUUID();
+  const expiraEm = calcularExpiracaoSessao();
+  const token = gerarToken(usuario, tokenId);
+
+  await registrarSessaoAtiva(usuario.id, tokenId, req.get("user-agent"), expiraEm);
 
   res.cookie("token", token, tokenCookieOptions);
 
@@ -47,11 +126,12 @@ function respostaLoginComCookie(res, usuario, mensagem = "Login realizado com su
   });
 }
 
-function gerarToken(usuario) {
+function gerarToken(usuario, tokenId) {
   return jwt.sign(
     {
       id: usuario.id,
       tipo: usuario.tipo,
+      jti: tokenId,
     },
     obterJwtSecretSeguro(),
     {
@@ -93,7 +173,7 @@ async function login(req, res, next) {
       });
     }
 
-    return respostaLoginComCookie(res, usuario);
+    return respostaLoginComCookie(req, res, usuario);
   } catch (error) {
     return next(error);
   }
@@ -101,7 +181,7 @@ async function login(req, res, next) {
 
 async function listarUsuariosDev(req, res, next) {
   try {
-    if (!modoDevHabilitado()) {
+    if (!modoDevHabilitado(req)) {
       return res.status(404).json({ erro: "Login rápido indisponível." });
     }
 
@@ -120,7 +200,7 @@ async function listarUsuariosDev(req, res, next) {
 
 async function devLogin(req, res, next) {
   try {
-    if (!modoDevHabilitado()) {
+    if (!modoDevHabilitado(req)) {
       return res.status(404).json({ erro: "Login rápido indisponível." });
     }
 
@@ -144,7 +224,7 @@ async function devLogin(req, res, next) {
       return res.status(404).json({ erro: "Usuário de teste não encontrado ou inativo." });
     }
 
-    return respostaLoginComCookie(res, usuario, "Login rápido de desenvolvimento realizado.");
+    return respostaLoginComCookie(req, res, usuario, "Login rápido de desenvolvimento realizado.");
   } catch (error) {
     return next(error);
   }
@@ -168,13 +248,24 @@ async function me(req, res, next) {
   }
 }
 
-function logout(req, res) {
-  res.clearCookie("token", tokenCookieOptions);
-  res.clearCookie("csrfToken", csrfCookieOptions());
+async function logout(req, res, next) {
+  try {
+    if (req.usuario?.id) {
+      await db.execute(
+        "DELETE FROM sessoes_ativas WHERE usuario_id = ?",
+        [req.usuario.id]
+      );
+    }
 
-  return res.status(200).json({
-    mensagem: "Logout realizado com sucesso.",
-  });
+    res.clearCookie("token", tokenCookieOptions);
+    res.clearCookie("csrfToken", csrfCookieOptions());
+
+    return res.status(200).json({
+      mensagem: "Logout realizado com sucesso.",
+    });
+  } catch (error) {
+    return next(error);
+  }
 }
 
 module.exports = {

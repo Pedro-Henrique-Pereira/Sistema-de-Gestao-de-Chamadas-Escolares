@@ -632,7 +632,7 @@ async function handleRemoverEquipe(idPessoa) {
 
             <form className="chart-card atraso-config-card" onSubmit={handleSalvarHorarioLimite}>
               <h3>Horário Máximo de Chegada</h3>
-              <p>Defina o horário institucional máximo para classificar a chegada do aluno como atraso. Após esse limite, o registro permanece como ausência.</p>
+              <p>Defina o horário máximo para chegada do aluno. Após esse limite, o registro permanece como ausência.</p>
 
               <label className="admin-time-config">
                 Horário máximo de chegada
@@ -1532,29 +1532,6 @@ async function handleRemoverEquipe(idPessoa) {
               <h2>Configurações da conta administrativa</h2>
               <p>Atualize os dados cadastrais da conta administrativa em uso.</p>
             </div>
-
-            <form className="admin-config-form" onSubmit={handleSalvarRetencaoJustificativas}>
-              <label>
-                Tempo Máximo de Armazenamento de Justificativas
-                <select
-                  value={tempoMaximoJustificativasMeses}
-                  onChange={(event) => setTempoMaximoJustificativasMeses(Number(event.target.value))}
-                  required
-                >
-                  <option value={1}>1 mês</option>
-                  <option value={2}>2 meses</option>
-                  <option value={3}>3 meses</option>
-                </select>
-              </label>
-
-              <p className="admin-config-help">
-                A limpeza automática roda todos os dias à meia-noite e remove justificativas mais antigas que o prazo definido.
-              </p>
-
-              <button className="admin-primary-btn" type="submit" disabled={salvandoConfig}>
-                {salvandoConfig ? "Processando..." : "Salvar tempo de armazenamento"}
-              </button>
-            </form>
 
             <form className="admin-config-form" onSubmit={handleSalvarConfiguracoes}>
               <label>

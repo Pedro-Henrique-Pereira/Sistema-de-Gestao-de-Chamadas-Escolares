@@ -260,10 +260,23 @@ async function atualizarEquipe(id, { nome, email, senhaHash, cargo, status }) {
   const ativo = status !== 'Inativo';
 
   if (senhaHash) {
-    await db.execute(
-      'UPDATE usuarios SET nome = ?, email = ?, senha_hash = ?, tipo = ?, ativo = ? WHERE id = ?',
-      [nome, email, senhaHash, tipo, ativo, id]
-    );
+    const connection = await db.getConnection();
+
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        'UPDATE usuarios SET nome = ?, email = ?, senha_hash = ?, tipo = ?, ativo = ? WHERE id = ?',
+        [nome, email, senhaHash, tipo, ativo, id]
+      );
+      await connection.execute('DELETE FROM sessoes_ativas WHERE usuario_id = ?', [id]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
     return;
   }
 
