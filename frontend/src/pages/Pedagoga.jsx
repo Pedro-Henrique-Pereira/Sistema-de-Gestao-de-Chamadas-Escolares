@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LogOut, Pencil } from "lucide-react";
+import { ChevronDown, LogOut, Pencil, Search } from "lucide-react";
 import api from "../services/api";
 import { pedagogaService } from "../services/pedagogaService";
 import AutomacaoFeedbackModal from "../components/AutomacaoFeedbackModal";
@@ -14,6 +14,40 @@ function normalizarStatus(aluno) {
   return String(aluno.status_presenca || aluno.status || "ausente").toLowerCase();
 }
 
+function normalizarBuscaResponsavel(valor = "") {
+  return String(valor)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function apenasDigitos(valor = "") {
+  return String(valor).replace(/\D/g, "");
+}
+
+function pontuarBuscaResponsavel(responsavel, termo) {
+  const texto = normalizarBuscaResponsavel(termo);
+  const digitos = apenasDigitos(termo);
+
+  if (!texto && !digitos) return 0;
+
+  const nomeResponsavel = normalizarBuscaResponsavel(responsavel.nome);
+  const contatoResponsavel = normalizarBuscaResponsavel(responsavel.contato);
+  const contatoDigitos = apenasDigitos(responsavel.contato);
+  const alunos = Array.isArray(responsavel.alunos) ? responsavel.alunos : [];
+  const nomesAlunos = alunos.map((aluno) => normalizarBuscaResponsavel(aluno.nome));
+
+  if (digitos.length > 0 && contatoDigitos === digitos) return 100;
+  if (nomeResponsavel === texto || nomesAlunos.some((nome) => nome === texto)) return 95;
+  if (digitos.length > 0 && contatoDigitos.includes(digitos)) return 90;
+  if (nomeResponsavel.startsWith(texto) || nomesAlunos.some((nome) => nome.startsWith(texto))) return 80;
+  if (nomeResponsavel.includes(texto) || nomesAlunos.some((nome) => nome.includes(texto))) return 70;
+  if (contatoResponsavel.includes(texto)) return 60;
+
+  return 0;
+}
+
 function Pedagoga() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activePage, setActivePage] = useState("dashboard");
@@ -24,9 +58,11 @@ function Pedagoga() {
   const [chamadaConfirmadaEditando, setChamadaConfirmadaEditando] = useState(null);
   const [turmasPendentes, setTurmasPendentes] = useState([]);
   const [responsaveis, setResponsaveis] = useState([]);
+  const [buscaResponsaveis, setBuscaResponsaveis] = useState("");
   const [justificativas, setJustificativas] = useState({});
   const [chamadasAbertas, setChamadasAbertas] = useState({});
   const [justificativasAbertas, setJustificativasAbertas] = useState({});
+  const [turmasResponsaveisAbertas, setTurmasResponsaveisAbertas] = useState({});
   const [responsavelEditando, setResponsavelEditando] = useState(null);
   const [turmaPedagogica, setTurmaPedagogica] = useState("");
   const [chamadaEditando, setChamadaEditando] = useState(null);
@@ -45,6 +81,8 @@ function Pedagoga() {
   const [automacaoModal, setAutomacaoModal] = useState({ aberto: false, ids: [] });
   const chamadasRefs = useRef({});
   const justificativasRefs = useRef({});
+  const responsaveisRefs = useRef({});
+  const [responsavelDestacado, setResponsavelDestacado] = useState(null);
 
   const menuItems = [
     { id: "dashboard", label: "Painel Principal" },
@@ -83,9 +121,72 @@ function Pedagoga() {
     setTurmasPendentes(turmasData.turmas || []);
   }
 
-  async function carregarResponsaveis() {
-    const { data } = await api.get("/api/pedagoga/responsaveis");
-    setResponsaveis(data.responsaveis || []);
+  async function carregarResponsaveis(busca = buscaResponsaveis) {
+    const termo = String(busca || "").trim();
+    const { data } = await api.get("/api/pedagoga/responsaveis", {
+      params: termo ? { busca: termo } : {},
+    });
+    const lista = data.responsaveis || [];
+    setResponsaveis(lista);
+    return lista;
+  }
+
+  async function localizarResponsavel(event) {
+    event.preventDefault();
+
+    const termo = String(buscaResponsaveis || "").trim();
+
+    try {
+      setLoading(true);
+      responsaveisRefs.current = {};
+      setResponsavelDestacado(null);
+
+      if (!termo) {
+        await carregarResponsaveis("");
+        setTurmasResponsaveisAbertas({});
+        setMensagem("Busca limpa. As turmas foram recolhidas novamente.");
+        return;
+      }
+
+      const lista = await carregarResponsaveis(termo);
+      const resultadosConfirmados = lista
+        .map((responsavel, indice) => ({
+          responsavel,
+          indice,
+          pontuacao: pontuarBuscaResponsavel(responsavel, termo),
+        }))
+        .filter((item) => item.pontuacao > 0)
+        .sort((a, b) => b.pontuacao - a.pontuacao || a.indice - b.indice)
+        .map((item) => item.responsavel);
+
+      if (!resultadosConfirmados.length) {
+        setTurmasResponsaveisAbertas({});
+        setMensagem("Nenhum responsável, aluno ou contato encontrado para essa busca.");
+        return;
+      }
+
+      const turmasEncontradas = resultadosConfirmados.reduce((acc, responsavel) => {
+        acc[responsavel.turma_id || "sem-turma"] = true;
+        return acc;
+      }, {});
+
+      const primeiro = resultadosConfirmados[0];
+      const turmaEncontrada = primeiro.turma_id || "sem-turma";
+      const chave = `${turmaEncontrada}-${primeiro.id}`;
+
+      setTurmasResponsaveisAbertas(turmasEncontradas);
+      setResponsavelDestacado(chave);
+
+      window.requestAnimationFrame(() => {
+        window.setTimeout(() => {
+          responsaveisRefs.current[chave]?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 160);
+      });
+    } catch (error) {
+      setMensagem(error.message || "Erro ao localizar responsável.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function carregarConfiguracaoAtraso() {
@@ -148,6 +249,38 @@ function Pedagoga() {
     carregarTudo();
   }, []);
 
+
+  useEffect(() => {
+    if (!responsavelDestacado || activePage !== "responsaveis") return;
+
+    const timer = window.setTimeout(() => {
+      responsaveisRefs.current[responsavelDestacado]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [responsavelDestacado, responsaveis, activePage]);
+
+  const responsaveisPorTurma = useMemo(() => {
+    const turmas = new Map();
+
+    responsaveis.forEach((responsavel) => {
+      const chaveTurma = responsavel.turma_id || "sem-turma";
+      const turmaNome = responsavel.turma_nome || "Sem turma vinculada";
+      const turma = turmas.get(chaveTurma) || {
+        turma_id: chaveTurma,
+        turma_nome: turmaNome,
+        responsaveis: [],
+      };
+
+      turma.responsaveis.push(responsavel);
+      turmas.set(chaveTurma, turma);
+    });
+
+    return Array.from(turmas.values()).sort((a, b) =>
+      String(a.turma_nome).localeCompare(String(b.turma_nome), "pt-BR", { numeric: true })
+    );
+  }, [responsaveis]);
+
   const turmaSelecionada = useMemo(() => {
     if (chamadaEditando) {
       return {
@@ -164,11 +297,19 @@ function Pedagoga() {
     return turmasPendentes.find((turma) => Number(turma.id) === Number(turmaPedagogica));
   }, [turmasPendentes, turmaPedagogica, chamadaEditando]);
 
+  function alternarTurmaResponsaveis(turmaId) {
+    setTurmasResponsaveisAbertas((prev) => ({
+      ...prev,
+      [turmaId]: !prev[turmaId],
+    }));
+  }
+
   function trocarPagina(pagina) {
     if (pagina === "chamadas") carregarConfiguracaoAtraso().catch(console.error);
     setActivePage(pagina);
     setSidebarOpen(false);
     setMensagem("");
+    if (pagina === "responsaveis") carregarResponsaveis(buscaResponsaveis).catch(console.error);
   }
 
   async function logout() {
@@ -849,10 +990,99 @@ function Pedagoga() {
         )}
 
         {activePage === "responsaveis" && (
-          <section className="page-section">
-            <div className="page-title"><h1>Responsáveis</h1><p>Responsáveis agrupados por nome e contato.</p></div>
-            <div className="content-card table-card"><table><thead><tr><th>Responsável</th><th>Contato</th><th>Alunos vinculados</th><th>Operações</th></tr></thead><tbody>{responsaveis.length === 0 && <tr><td colSpan="4">Nenhum registro encontrado</td></tr>}{responsaveis.map((resp) => <tr key={`${resp.nome}-${resp.contato}`}><td>{resp.nome}</td><td>{resp.contato}</td><td>{resp.alunos.map((a) => `${a.nome}${a.turma ? ` (${a.turma})` : ""}`).join(", ")}</td><td><button className="btn-secondary" type="button" onClick={() => setResponsavelEditando(resp)}>Atualizar dados</button></td></tr>)}</tbody></table></div>
-            {responsavelEditando && <div className="modal-backdrop"><div className="content-card edit-form modal-card"><h2>Atualizar responsável</h2><label>Nome</label><input value={responsavelEditando.nome} onChange={(e) => setResponsavelEditando({ ...responsavelEditando, nome: e.target.value })} /><label>Contato</label><input value={responsavelEditando.contato} onChange={(e) => setResponsavelEditando({ ...responsavelEditando, contato: e.target.value })} /><small>Alunos: {responsavelEditando.alunos.map((a) => a.nome).join(", ")}</small><div className="action-row"><button className="btn-primary" type="button" onClick={salvarResponsavel} disabled={loading}>Confirmar atualização</button><button className="btn-secondary" type="button" onClick={() => setResponsavelEditando(null)}>Cancelar</button></div></div></div>}
+          <section className="page-section responsaveis-page">
+            <div className="page-title">
+              <h1>Responsáveis</h1>
+              <p>Contatos organizados por turma dos alunos, com busca por responsável, estudante ou telefone.</p>
+            </div>
+
+            <form className="content-card responsaveis-search-card" onSubmit={localizarResponsavel}>
+              <label htmlFor="busca-responsaveis">Busca avançada</label>
+              <div className="responsaveis-search-input">
+                <Search size={18} aria-hidden="true" />
+                <input
+                  id="busca-responsaveis"
+                  type="search"
+                  placeholder="Digite nome do responsável, aluno ou telefone e pressione Enter"
+                  value={buscaResponsaveis}
+                  onChange={(event) => {
+                    setBuscaResponsaveis(event.target.value);
+                    setResponsavelDestacado(null);
+                  }}
+                />
+                <button className="btn-primary" type="submit" disabled={loading}>
+                  Buscar
+                </button>
+              </div>
+              <small>{responsaveis.length} vínculo(s) encontrado(s). Pressione Enter para ir direto ao primeiro resultado.</small>
+            </form>
+
+            {responsaveisPorTurma.length === 0 && (
+              <div className="content-card empty-state">Nenhum responsável encontrado para os filtros informados.</div>
+            )}
+
+            <div className="responsaveis-turmas-list">
+              {responsaveisPorTurma.map((turma) => (
+                <div className="content-card responsaveis-turma-card" key={turma.turma_id}>
+                  <button
+                    className={`responsaveis-turma-header ${turmasResponsaveisAbertas[turma.turma_id] ? "aberta" : ""}`}
+                    type="button"
+                    onClick={() => alternarTurmaResponsaveis(turma.turma_id)}
+                    aria-expanded={Boolean(turmasResponsaveisAbertas[turma.turma_id])}
+                    aria-controls={`responsaveis-turma-${turma.turma_id}`}
+                  >
+                    <div>
+                      <h2>{turma.turma_nome}</h2>
+                      <p>{turma.responsaveis.length} responsável(is) vinculado(s)</p>
+                    </div>
+                    <ChevronDown className="responsaveis-turma-icone" size={22} aria-hidden="true" />
+                  </button>
+
+                  {turmasResponsaveisAbertas[turma.turma_id] && (
+                  <div className="table-card responsaveis-table-wrapper" id={`responsaveis-turma-${turma.turma_id}`}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Responsável</th>
+                          <th>Contato</th>
+                          <th>Aluno vinculado nesta turma</th>
+                          <th>Parentesco</th>
+                          <th>Operações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {turma.responsaveis.map((resp) => {
+                          const chaveResponsavel = `${turma.turma_id}-${resp.id}`;
+
+                          return (
+                          <tr
+                            key={chaveResponsavel}
+                            ref={(elemento) => {
+                              if (elemento) responsaveisRefs.current[chaveResponsavel] = elemento;
+                            }}
+                            className={responsavelDestacado === chaveResponsavel ? "responsavel-destacado" : ""}
+                          >
+                            <td>{resp.nome}</td>
+                            <td>{resp.contato}</td>
+                            <td>{resp.alunos.map((a) => a.nome).join(", ")}</td>
+                            <td>{resp.parentesco || "Não informado"}</td>
+                            <td>
+                              <button className="btn-secondary" type="button" onClick={() => setResponsavelEditando(resp)}>
+                                Atualizar dados
+                              </button>
+                            </td>
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {responsavelEditando && <div className="modal-backdrop"><div className="content-card edit-form modal-card"><h2>Atualizar responsável</h2><label>Nome</label><input value={responsavelEditando.nome} onChange={(e) => setResponsavelEditando({ ...responsavelEditando, nome: e.target.value })} /><label>Contato</label><input value={responsavelEditando.contato} onChange={(e) => setResponsavelEditando({ ...responsavelEditando, contato: e.target.value })} /><small>Alunos: {responsavelEditando.alunos.map((a) => `${a.nome}${a.turma ? ` (${a.turma})` : ""}`).join(", ")}</small><div className="action-row"><button className="btn-primary" type="button" onClick={salvarResponsavel} disabled={loading}>Confirmar atualização</button><button className="btn-secondary" type="button" onClick={() => setResponsavelEditando(null)}>Cancelar</button></div></div></div>}
           </section>
         )}
 

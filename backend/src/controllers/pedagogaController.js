@@ -797,27 +797,60 @@ async function atualizarChamada(req, res, next) {
 
 async function responsaveis(req, res, next) {
   try {
+    const busca = String(req.query.busca || "").trim().slice(0, 80);
+    const filtros = [];
+    const parametros = [];
+
+    if (busca) {
+      const termo = `%${busca.toLowerCase()}%`;
+      filtros.push(`
+        AND (
+          LOWER(r.nome) LIKE ?
+          OR LOWER(a.nome) LIKE ?
+          OR LOWER(r.contato) LIKE ?
+          OR REPLACE(REPLACE(REPLACE(REPLACE(r.contato, ' ', ''), '-', ''), '(', ''), ')', '') LIKE ?
+        )
+      `);
+      parametros.push(termo, termo, termo, `%${busca.replace(/\D/g, "") || busca}%`);
+    }
+
     const [rows] = await db.execute(
       `
-      SELECT r.id, r.nome, r.contato, r.parentesco, a.id AS aluno_id, a.nome AS aluno_nome, t.nome AS turma_nome
+      SELECT
+        r.id,
+        r.nome,
+        r.contato,
+        r.parentesco,
+        a.id AS aluno_id,
+        a.nome AS aluno_nome,
+        t.id AS turma_id,
+        t.nome AS turma_nome
       FROM responsaveis r
       INNER JOIN alunos a ON a.id = r.aluno_id
       LEFT JOIN turmas t ON t.id = a.turma_id
-      ORDER BY r.nome ASC, a.nome ASC
-      `
+      WHERE 1 = 1
+        ${filtros.join("\n")}
+      ORDER BY t.nome ASC, r.nome ASC, a.nome ASC
+      LIMIT 500
+      `,
+      parametros
     );
 
     const grupos = new Map();
     rows.forEach((row) => {
-      const chave = `${String(row.nome).trim().toLowerCase()}|${String(row.contato).trim()}`;
+      const turmaId = row.turma_id || "sem-turma";
+      const chave = `${turmaId}|${String(row.nome).trim().toLowerCase()}|${String(row.contato).trim()}`;
       const atual = grupos.get(chave) || {
         id: row.id,
         ids: [],
         nome: row.nome,
         contato: row.contato,
         parentesco: row.parentesco,
+        turma_id: row.turma_id,
+        turma_nome: row.turma_nome || "Sem turma vinculada",
         alunos: [],
       };
+
       atual.ids.push(row.id);
       atual.alunos.push({ id: row.aluno_id, nome: row.aluno_nome, turma: row.turma_nome });
       grupos.set(chave, atual);
