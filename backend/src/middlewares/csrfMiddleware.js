@@ -9,10 +9,12 @@ function gerarCsrfToken() {
 }
 
 function cookieOptions() {
+  const isProduction = process.env.NODE_ENV === "production";
+
   return {
     httpOnly: false,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "strict",
     path: "/",
   };
 }

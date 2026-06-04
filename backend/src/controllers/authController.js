@@ -6,12 +6,16 @@ const db = require("../database/connection");
 const { formatarEmail } = require("../utils/formatadores");
 const { emitirCsrfToken, cookieOptions: csrfCookieOptions } = require("../middlewares/csrfMiddleware");
 
-const tokenCookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "strict",
-  path: "/",
-};
+function tokenCookieOptions() {
+  const isProduction = process.env.NODE_ENV === "production";
+
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "strict",
+    path: "/",
+  };
+}
 
 function valorHostEhLocalhost(valor) {
   if (!valor) return false;
@@ -110,7 +114,7 @@ async function respostaLoginComCookie(req, res, usuario, mensagem = "Login reali
 
   await registrarSessaoAtiva(usuario.id, tokenId, req.get("user-agent"), expiraEm);
 
-  res.cookie("token", token, tokenCookieOptions);
+  res.cookie("token", token, tokenCookieOptions());
 
   const csrfToken = emitirCsrfToken(null, res);
 
@@ -257,7 +261,7 @@ async function logout(req, res, next) {
       );
     }
 
-    res.clearCookie("token", tokenCookieOptions);
+    res.clearCookie("token", tokenCookieOptions());
     res.clearCookie("csrfToken", csrfCookieOptions());
 
     return res.status(200).json({

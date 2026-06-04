@@ -1,5 +1,23 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://192.168.0.13:3001";
+const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
 const METODOS_SEGUROS = new Set(["GET", "HEAD", "OPTIONS"]);
+const ENDPOINTS_PUBLICOS_AUTH = new Set([
+  "/api/auth/login",
+  "/api/auth/dev-login",
+  "/api/auth/dev-users",
+  "/api/auth/csrf-token",
+]);
+
+const MENSAGEM_SESSAO_EXPIRADA =
+  "Sua sessão foi encerrada por segurança. Faça login novamente.";
+
+if (!API_URL) {
+  throw new Error("VITE_API_URL não configurada para o frontend.");
+}
+
+if (import.meta.env.PROD && !API_URL.startsWith("https://")) {
+  throw new Error("Em produção, VITE_API_URL deve usar HTTPS.");
+}
 
 function getCookie(nome) {
   return document.cookie
@@ -19,11 +37,52 @@ function normalizarEndpoint(endpoint = "") {
   return `/api${caminho.startsWith("/") ? caminho : `/${caminho}`}`;
 }
 
+function montarQueryString(params = {}) {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([chave, valor]) => {
+    if (valor === undefined || valor === null || valor === "") return;
+
+    if (Array.isArray(valor)) {
+      valor.forEach((item) => {
+        if (item !== undefined && item !== null && item !== "") {
+          searchParams.append(chave, item);
+        }
+      });
+      return;
+    }
+
+    searchParams.append(chave, valor);
+  });
+
+  const queryString = searchParams.toString();
+  return queryString ? `?${queryString}` : "";
+}
+
+function montarUrl(endpoint, params) {
+  const caminho = normalizarEndpoint(endpoint);
+  const queryString = montarQueryString(params);
+  return `${API_URL}${caminho}${queryString}`;
+}
+
+function deveRedirecionarPorSessao(endpoint) {
+  const caminho = normalizarEndpoint(endpoint);
+  return !ENDPOINTS_PUBLICOS_AUTH.has(caminho) && window.location.pathname !== "/login";
+}
+
+function redirecionarParaLoginPorSessao(response, endpoint) {
+  if (response.status !== 401 || !deveRedirecionarPorSessao(endpoint)) return;
+
+  sessionStorage.setItem("loginMessage", MENSAGEM_SESSAO_EXPIRADA);
+  window.location.replace("/login");
+}
+
 async function obterCsrfToken() {
   let token = getCookie("csrfToken");
   if (token) return decodeURIComponent(token);
 
-  const response = await fetch(`${API_URL}/api/auth/csrf-token`, {
+  const endpoint = "/api/auth/csrf-token";
+  const response = await fetch(montarUrl(endpoint), {
     method: "GET",
     credentials: "include",
   });
@@ -52,17 +111,19 @@ export async function apiFetch(endpoint, options = {}) {
   const method = String(options.method || "GET").toUpperCase();
   const headers = await montarHeaders({ ...options, method });
 
-  const response = await fetch(`${API_URL}${normalizarEndpoint(endpoint)}`, {
+  const response = await fetch(montarUrl(endpoint, options.params), {
     ...options,
     method,
     headers,
     credentials: "include",
   });
 
+  redirecionarParaLoginPorSessao(response, endpoint);
+
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.erro || "Erro na requisição");
+    throw new Error(data?.erro || data?.message || "Erro na requisição");
   }
 
   return data;
@@ -72,47 +133,53 @@ export async function apiDownload(endpoint, options = {}) {
   const method = String(options.method || "GET").toUpperCase();
   const headers = await montarHeaders({ ...options, method });
 
-  const response = await fetch(`${API_URL}${normalizarEndpoint(endpoint)}`, {
+  const response = await fetch(montarUrl(endpoint, options.params), {
     ...options,
     method,
     headers,
     credentials: "include",
   });
 
+  redirecionarParaLoginPorSessao(response, endpoint);
+
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    throw new Error(data?.erro || "Não foi possível gerar o relatório.");
+    throw new Error(data?.erro || data?.message || "Não foi possível gerar o relatório.");
   }
 
   return response.blob();
 }
 
-async function request(method, endpoint, body) {
+async function request(method, endpoint, body, config = {}) {
   const metodo = String(method || "GET").toUpperCase();
-  const headers = await montarHeaders({ method: metodo });
+  const headers = await montarHeaders({ ...config, method: metodo });
 
-  const response = await fetch(`${API_URL}${normalizarEndpoint(endpoint)}`, {
+  const response = await fetch(montarUrl(endpoint, config.params), {
+    ...config,
     method: metodo,
     credentials: "include",
     headers,
     body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
   });
 
+  redirecionarParaLoginPorSessao(response, endpoint);
+
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.erro || "Erro na requisição");
+    throw new Error(data?.erro || data?.message || "Erro na requisição");
   }
 
   return { data };
 }
 
 const api = {
-  get: (endpoint) => request("GET", endpoint),
-  post: (endpoint, body) => request("POST", endpoint, body),
-  put: (endpoint, body) => request("PUT", endpoint, body),
-  patch: (endpoint, body) => request("PATCH", endpoint, body),
-  delete: (endpoint) => request("DELETE", endpoint),
+  get: (endpoint, config) => request("GET", endpoint, undefined, config),
+  post: (endpoint, body, config) => request("POST", endpoint, body, config),
+  put: (endpoint, body, config) => request("PUT", endpoint, body, config),
+  patch: (endpoint, body, config) => request("PATCH", endpoint, body, config),
+  delete: (endpoint, config) => request("DELETE", endpoint, undefined, config),
 };
 
+export { API_URL, MENSAGEM_SESSAO_EXPIRADA };
 export default api;

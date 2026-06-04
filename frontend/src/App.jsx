@@ -6,11 +6,14 @@ import Professor from "./pages/Professor";
 import Pedagoga from "./pages/Pedagoga";
 
 import PrivateRoute from "./components/PrivateRoute";
+import GlobalFooter from "./components/GlobalFooter";
 
 function App() {
   return (
     <BrowserRouter>
-      <Routes>
+      <div className="app-shell">
+        <div className="app-content">
+          <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
 
         <Route path="/login" element={<Login />} />
@@ -41,7 +44,10 @@ function App() {
             </PrivateRoute>
           }
         />
-      </Routes>
+          </Routes>
+        </div>
+        <GlobalFooter />
+      </div>
     </BrowserRouter>
   );
 }

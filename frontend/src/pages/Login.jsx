@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
+import { API_URL, apiFetch } from "../services/api";
 import "../styles/Login.css";
 
 export default function Login() {
@@ -11,7 +12,6 @@ export default function Login() {
   const [usuariosDev, setUsuariosDev] = useState([]);
   const [carregandoDev, setCarregandoDev] = useState(false);
 
-  const API_BASE = import.meta.env.VITE_API_URL || "http://192.168.0.13:3001";
 
   function hostEhLocalhost(hostname) {
     return ["localhost", "127.0.0.1", "::1"].includes(hostname);
@@ -26,7 +26,7 @@ export default function Login() {
   }
 
   const frontendEmLocalhost = hostEhLocalhost(window.location.hostname);
-  const backendEmLocalhost = apiBaseEhLocalhost(API_BASE);
+  const backendEmLocalhost = apiBaseEhLocalhost(API_URL);
   const loginRapidoDevHabilitado =
     frontendEmLocalhost &&
     backendEmLocalhost &&
@@ -38,13 +38,7 @@ export default function Login() {
 
     async function carregarUsuariosDev() {
       try {
-        const response = await fetch(`${API_BASE}/api/auth/dev-users`, {
-          credentials: "include",
-        });
-
-        if (!response.ok) return;
-
-        const data = await response.json();
+        const data = await apiFetch("/api/auth/dev-users");
         setUsuariosDev(data.usuarios || []);
       } catch {
         setUsuariosDev([]);
@@ -52,27 +46,26 @@ export default function Login() {
     }
 
     carregarUsuariosDev();
-  }, [API_BASE, loginRapidoDevHabilitado]);
+  }, [loginRapidoDevHabilitado]);
+
+  useEffect(() => {
+    const mensagemSessao = sessionStorage.getItem("loginMessage");
+
+    if (mensagemSessao) {
+      setErro(mensagemSessao);
+      sessionStorage.removeItem("loginMessage");
+    }
+  }, []);
 
   async function handleLoginRapidoDev(usuarioId) {
     setErro("");
     setCarregandoDev(true);
 
     try {
-      const response = await fetch(`${API_BASE}/api/auth/dev-login`, {
+      const data = await apiFetch("/api/auth/dev-login", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
         body: JSON.stringify({ id: usuarioId }),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.erro || "Login rápido indisponível.");
-      }
 
       redirecionarPorCargo(data.usuario.tipo);
     } catch (error) {
@@ -95,27 +88,13 @@ export default function Login() {
     try {
       setCarregando(true);
 
-    const response = await fetch(`${API_BASE}/api/auth/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      credentials: "include",
-      body: JSON.stringify({
-        email,
-        senha,
-      }),
-    });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.erro ||
-            data.message ||
-            "E-mail ou senha inválidos."
-        );
-      }
+      const data = await apiFetch("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email,
+          senha,
+        }),
+      });
 
       const usuario = data.usuario;
 

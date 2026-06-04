@@ -43,6 +43,7 @@ const { iniciarRotinaLimpezaAutomacao } = require("./services/limpezaAutomacaoSe
 const app = express();
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://192.168.0.13:5173";
+
 const FRONTEND_URLS_EXTRAS = String(process.env.FRONTEND_URLS_EXTRAS || "")
   .split(",")
   .map((url) => url.trim())
@@ -53,7 +54,9 @@ const origensPermitidas = new Set([
   "http://192.168.0.13:5173",
   "http://192.168.0.13:4173",
   "http://localhost:5173",
+  "http://localhost:4173",
   "http://127.0.0.1:5173",
+  "http://127.0.0.1:4173",
   ...FRONTEND_URLS_EXTRAS,
 ]);
 
@@ -61,10 +64,22 @@ function origemRedeLocalPermitida(origin = "") {
   return /^http:\/\/192\.168\.0\.\d{1,3}:(5173|4173)$/.test(origin);
 }
 
+function origemVercelPermitida(origin = "") {
+  return (
+    process.env.ALLOW_VERCEL_PREVIEWS === "true" &&
+    /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)
+  );
+}
+
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || origensPermitidas.has(origin) || origemRedeLocalPermitida(origin)) {
+      if (
+        !origin ||
+        origensPermitidas.has(origin) ||
+        origemRedeLocalPermitida(origin) ||
+        origemVercelPermitida(origin)
+      ) {
         return callback(null, true);
       }
 
