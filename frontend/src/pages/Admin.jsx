@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { LogOut, Pencil } from "lucide-react";
 import { apiFetch } from "../services/api";
 import { buscarConfiguracaoEscola, salvarConfiguracaoEscola } from "../services/configuracoesEscolaService";
@@ -14,8 +14,12 @@ export default function Administrador() {
 
   const [abaRegistros, setAbaRegistros] = useState("alunos");
   const [pesquisaAluno, setPesquisaAluno] = useState("");
+  const [pesquisaAlunoDebounced, setPesquisaAlunoDebounced] = useState("");
   const [turmasAbertas, setTurmasAbertas] = useState({});
   const [alunosAbertos, setAlunosAbertos] = useState({});
+  const [alunoDestacadoId, setAlunoDestacadoId] = useState(null);
+  const primeiraBuscaAplicadaRef = useRef(false);
+  const linhaAlunoRefs = useRef({});
 
   const [modalAluno, setModalAluno] = useState(null);
   const [modalTurma, setModalTurma] = useState(false);
@@ -149,16 +153,134 @@ const [alunos, setAlunos] = useState([]);
 
 const [equipe, setEquipe] = useState([]);
 
-const alunosFiltrados = alunos.filter((aluno) =>
-  aluno.nome.toLowerCase().includes(pesquisaAluno.toLowerCase())
+const normalizarBusca = (valor = "") =>
+  String(valor)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+const apenasDigitosBusca = (valor = "") => String(valor).replace(/\D/g, "");
+
+const pontuarPesquisaAluno = (aluno, termoNormalizado, digitosBusca) => {
+  if (!termoNormalizado && !digitosBusca) return 1;
+
+  const nomeAluno = normalizarBusca(aluno.nome);
+  const turmaAluno = normalizarBusca(aluno.turma);
+  const responsaveis = aluno.responsaveis || [];
+  const nomesResponsaveis = responsaveis.map((responsavel) => normalizarBusca(responsavel.nome));
+  const contatosResponsaveis = responsaveis.flatMap((responsavel) => [
+    normalizarBusca(responsavel.contato),
+    normalizarBusca(responsavel.telefone),
+  ]);
+  const contatosDigitos = responsaveis.flatMap((responsavel) => [
+    apenasDigitosBusca(responsavel.contato),
+    apenasDigitosBusca(responsavel.telefone),
+  ]);
+
+  if (digitosBusca && contatosDigitos.some((contato) => contato === digitosBusca)) return 100;
+  if (nomeAluno === termoNormalizado || nomesResponsaveis.some((nome) => nome === termoNormalizado)) return 95;
+  if (digitosBusca && contatosDigitos.some((contato) => contato.includes(digitosBusca))) return 90;
+  if (nomeAluno.startsWith(termoNormalizado) || nomesResponsaveis.some((nome) => nome.startsWith(termoNormalizado))) return 80;
+  if (nomeAluno.includes(termoNormalizado) || nomesResponsaveis.some((nome) => nome.includes(termoNormalizado))) return 70;
+  if (contatosResponsaveis.some((contato) => contato.includes(termoNormalizado))) return 60;
+  if (turmaAluno.includes(termoNormalizado)) return 40;
+
+  return 0;
+};
+
+const termoPesquisaAluno = useMemo(
+  () => normalizarBusca(pesquisaAlunoDebounced),
+  [pesquisaAlunoDebounced]
 );
 
-const alunosPorTurma = turmas.map((turma) => ({
-  ...turma,
-  alunos: alunosFiltrados.filter((aluno) => aluno.turma === turma.nome),
-}));
+const pesquisaAlunoAtiva = useMemo(
+  () => Boolean(termoPesquisaAluno || apenasDigitosBusca(pesquisaAlunoDebounced)),
+  [termoPesquisaAluno, pesquisaAlunoDebounced]
+);
 
-const alunosSemTurma = alunosFiltrados.filter((aluno) => !aluno.turma);
+const alunosFiltrados = useMemo(() => {
+  const digitosBusca = apenasDigitosBusca(pesquisaAlunoDebounced);
+
+  if (!pesquisaAlunoAtiva) return alunos;
+
+  return alunos
+    .map((aluno, indice) => ({
+      aluno,
+      indice,
+      pontuacao: pontuarPesquisaAluno(aluno, termoPesquisaAluno, digitosBusca),
+    }))
+    .filter((item) => item.pontuacao > 0)
+    .sort((a, b) => b.pontuacao - a.pontuacao || a.indice - b.indice)
+    .map((item) => item.aluno);
+}, [alunos, termoPesquisaAluno, pesquisaAlunoDebounced]);
+
+const alunosPorTurma = useMemo(() => {
+  const grupos = turmas.map((turma) => ({
+    ...turma,
+    alunos: alunosFiltrados.filter((aluno) => aluno.turma === turma.nome),
+  }));
+
+  if (!pesquisaAlunoAtiva) return grupos;
+
+  return grupos.filter((turma) => turma.alunos.length > 0);
+}, [turmas, alunosFiltrados, pesquisaAlunoAtiva]);
+
+const alunosSemTurma = useMemo(
+  () => alunosFiltrados.filter((aluno) => !aluno.turma),
+  [alunosFiltrados]
+);
+
+
+useEffect(() => {
+  const timer = window.setTimeout(() => {
+    setPesquisaAlunoDebounced(pesquisaAluno);
+  }, 300);
+
+  return () => window.clearTimeout(timer);
+}, [pesquisaAluno]);
+
+useEffect(() => {
+  if (abaRegistros !== "alunos") return;
+
+  if (!pesquisaAlunoAtiva) {
+    setTurmasAbertas({});
+    setAlunoDestacadoId(null);
+    primeiraBuscaAplicadaRef.current = false;
+    return;
+  }
+
+  const proximasTurmasAbertas = {};
+
+  if (alunosSemTurma.length > 0) {
+    proximasTurmasAbertas["sem-turma"] = true;
+  }
+
+  alunosPorTurma.forEach((turma) => {
+    if (turma.alunos.length > 0) {
+      proximasTurmasAbertas[turma.nome] = true;
+    }
+  });
+
+  setTurmasAbertas(proximasTurmasAbertas);
+
+  const primeiroResultado = alunosFiltrados[0];
+  if (!primeiroResultado) {
+    setAlunoDestacadoId(null);
+    return;
+  }
+
+  setAlunoDestacadoId(primeiroResultado.id);
+
+  window.setTimeout(() => {
+    linhaAlunoRefs.current[primeiroResultado.id]?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, primeiraBuscaAplicadaRef.current ? 80 : 160);
+
+  primeiraBuscaAplicadaRef.current = true;
+}, [abaRegistros, pesquisaAlunoAtiva, alunosFiltrados, alunosPorTurma, alunosSemTurma]);
 
 const totalMetricasDia =
   metricasDia.presentes + metricasDia.ausentes;
@@ -765,10 +887,10 @@ async function handleRemoverEquipe(idPessoa) {
 
                 <div className="filter-panel">
                   <label>
-                    Pesquisar aluno
+                    Pesquisar aluno, responsável ou contato
                     <input
                       type="text"
-                      placeholder="Informe o nome do aluno"
+                      placeholder="Digite aluno, responsável ou telefone"
                       value={pesquisaAluno}
                       onChange={(event) => setPesquisaAluno(event.target.value)}
                     />
@@ -804,9 +926,12 @@ async function handleRemoverEquipe(idPessoa) {
 
                               <tbody>
                                 {alunosSemTurma.map((aluno) => (
-                                  <>
+                                  <Fragment key={aluno.id}>
                                     <tr
-                                      key={aluno.id}
+                                      ref={(elemento) => {
+                                        if (elemento) linhaAlunoRefs.current[aluno.id] = elemento;
+                                      }}
+                                      className={pesquisaAlunoAtiva || alunoDestacadoId === aluno.id ? "admin-registro-destacado" : ""}
                                       onClick={() => toggleAluno(aluno.id)}
                                     >
                                       <td>{aluno.nome}</td>
@@ -883,7 +1008,7 @@ async function handleRemoverEquipe(idPessoa) {
                                         </td>
                                       </tr>
                                     )}
-                                  </>
+                                  </Fragment>
                                 ))}
                               </tbody>
                             </table>
@@ -926,9 +1051,12 @@ async function handleRemoverEquipe(idPessoa) {
                                 )}
 
                                 {turma.alunos.map((aluno) => (
-                                  <>
+                                  <Fragment key={aluno.id}>
                                     <tr
-                                      key={aluno.id}
+                                      ref={(elemento) => {
+                                        if (elemento) linhaAlunoRefs.current[aluno.id] = elemento;
+                                      }}
+                                      className={pesquisaAlunoAtiva || alunoDestacadoId === aluno.id ? "admin-registro-destacado" : ""}
                                       onClick={() => toggleAluno(aluno.id)}
                                     >
                                       <td>{aluno.nome}</td>
@@ -1008,7 +1136,7 @@ async function handleRemoverEquipe(idPessoa) {
                                         </td>
                                       </tr>
                                     )}
-                                  </>
+                                  </Fragment>
                                 ))}
                               </tbody>
                             </table>

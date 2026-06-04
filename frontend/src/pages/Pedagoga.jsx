@@ -59,6 +59,7 @@ function Pedagoga() {
   const [turmasPendentes, setTurmasPendentes] = useState([]);
   const [responsaveis, setResponsaveis] = useState([]);
   const [buscaResponsaveis, setBuscaResponsaveis] = useState("");
+  const [buscaResponsaveisDebounced, setBuscaResponsaveisDebounced] = useState("");
   const [justificativas, setJustificativas] = useState({});
   const [chamadasAbertas, setChamadasAbertas] = useState({});
   const [justificativasAbertas, setJustificativasAbertas] = useState({});
@@ -82,6 +83,7 @@ function Pedagoga() {
   const chamadasRefs = useRef({});
   const justificativasRefs = useRef({});
   const responsaveisRefs = useRef({});
+  const primeiraBuscaResponsavelAplicadaRef = useRef(false);
   const [responsavelDestacado, setResponsavelDestacado] = useState(null);
 
   const menuItems = [
@@ -131,62 +133,10 @@ function Pedagoga() {
     return lista;
   }
 
-  async function localizarResponsavel(event) {
+  function localizarResponsavel(event) {
     event.preventDefault();
-
-    const termo = String(buscaResponsaveis || "").trim();
-
-    try {
-      setLoading(true);
-      responsaveisRefs.current = {};
-      setResponsavelDestacado(null);
-
-      if (!termo) {
-        await carregarResponsaveis("");
-        setTurmasResponsaveisAbertas({});
-        setMensagem("Busca limpa. As turmas foram recolhidas novamente.");
-        return;
-      }
-
-      const lista = await carregarResponsaveis(termo);
-      const resultadosConfirmados = lista
-        .map((responsavel, indice) => ({
-          responsavel,
-          indice,
-          pontuacao: pontuarBuscaResponsavel(responsavel, termo),
-        }))
-        .filter((item) => item.pontuacao > 0)
-        .sort((a, b) => b.pontuacao - a.pontuacao || a.indice - b.indice)
-        .map((item) => item.responsavel);
-
-      if (!resultadosConfirmados.length) {
-        setTurmasResponsaveisAbertas({});
-        setMensagem("Nenhum responsável, aluno ou contato encontrado para essa busca.");
-        return;
-      }
-
-      const turmasEncontradas = resultadosConfirmados.reduce((acc, responsavel) => {
-        acc[responsavel.turma_id || "sem-turma"] = true;
-        return acc;
-      }, {});
-
-      const primeiro = resultadosConfirmados[0];
-      const turmaEncontrada = primeiro.turma_id || "sem-turma";
-      const chave = `${turmaEncontrada}-${primeiro.id}`;
-
-      setTurmasResponsaveisAbertas(turmasEncontradas);
-      setResponsavelDestacado(chave);
-
-      window.requestAnimationFrame(() => {
-        window.setTimeout(() => {
-          responsaveisRefs.current[chave]?.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 160);
-      });
-    } catch (error) {
-      setMensagem(error.message || "Erro ao localizar responsável.");
-    } finally {
-      setLoading(false);
-    }
+    setBuscaResponsaveisDebounced(buscaResponsaveis);
+    aplicarFocoBuscaResponsaveis(buscaResponsaveis, responsaveis);
   }
 
   async function carregarConfiguracaoAtraso() {
@@ -260,10 +210,91 @@ function Pedagoga() {
     return () => window.clearTimeout(timer);
   }, [responsavelDestacado, responsaveis, activePage]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setBuscaResponsaveisDebounced(buscaResponsaveis);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [buscaResponsaveis]);
+
+  const buscaResponsaveisAtiva = useMemo(() => {
+    const termo = String(buscaResponsaveisDebounced || "").trim();
+    return Boolean(normalizarBuscaResponsavel(termo) || apenasDigitos(termo));
+  }, [buscaResponsaveisDebounced]);
+
+  const responsaveisFiltrados = useMemo(() => {
+    const termo = String(buscaResponsaveisDebounced || "").trim();
+
+    if (!buscaResponsaveisAtiva) return responsaveis;
+
+    return responsaveis
+      .map((responsavel, indice) => ({
+        responsavel,
+        indice,
+        pontuacao: pontuarBuscaResponsavel(responsavel, termo),
+      }))
+      .filter((item) => item.pontuacao > 0)
+      .sort((a, b) => b.pontuacao - a.pontuacao || a.indice - b.indice)
+      .map((item) => item.responsavel);
+  }, [responsaveis, buscaResponsaveisDebounced, buscaResponsaveisAtiva]);
+
+  function aplicarFocoBuscaResponsaveis(termoBusca, listaResponsaveis) {
+    const termo = String(termoBusca || "").trim();
+    const termoNormalizado = normalizarBuscaResponsavel(termo);
+    const digitos = apenasDigitos(termo);
+
+    if (!termoNormalizado && !digitos) {
+      setTurmasResponsaveisAbertas({});
+      setResponsavelDestacado(null);
+      primeiraBuscaResponsavelAplicadaRef.current = false;
+      return;
+    }
+
+    const resultados = listaResponsaveis
+      .map((responsavel, indice) => ({
+        responsavel,
+        indice,
+        pontuacao: pontuarBuscaResponsavel(responsavel, termo),
+      }))
+      .filter((item) => item.pontuacao > 0)
+      .sort((a, b) => b.pontuacao - a.pontuacao || a.indice - b.indice)
+      .map((item) => item.responsavel);
+
+    if (!resultados.length) {
+      setTurmasResponsaveisAbertas({});
+      setResponsavelDestacado(null);
+      return;
+    }
+
+    const turmasEncontradas = resultados.reduce((acc, responsavel) => {
+      acc[responsavel.turma_id || "sem-turma"] = true;
+      return acc;
+    }, {});
+
+    const primeiro = resultados[0];
+    const turmaEncontrada = primeiro.turma_id || "sem-turma";
+    const chave = `${turmaEncontrada}-${primeiro.id}`;
+
+    setTurmasResponsaveisAbertas(turmasEncontradas);
+    setResponsavelDestacado(chave);
+
+    window.setTimeout(() => {
+      responsaveisRefs.current[chave]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, primeiraBuscaResponsavelAplicadaRef.current ? 80 : 160);
+
+    primeiraBuscaResponsavelAplicadaRef.current = true;
+  }
+
+  useEffect(() => {
+    if (activePage !== "responsaveis") return;
+    aplicarFocoBuscaResponsaveis(buscaResponsaveisDebounced, responsaveis);
+  }, [activePage, buscaResponsaveisDebounced, responsaveis]);
+
   const responsaveisPorTurma = useMemo(() => {
     const turmas = new Map();
 
-    responsaveis.forEach((responsavel) => {
+    responsaveisFiltrados.forEach((responsavel) => {
       const chaveTurma = responsavel.turma_id || "sem-turma";
       const turmaNome = responsavel.turma_nome || "Sem turma vinculada";
       const turma = turmas.get(chaveTurma) || {
@@ -279,7 +310,7 @@ function Pedagoga() {
     return Array.from(turmas.values()).sort((a, b) =>
       String(a.turma_nome).localeCompare(String(b.turma_nome), "pt-BR", { numeric: true })
     );
-  }, [responsaveis]);
+  }, [responsaveisFiltrados]);
 
   const turmaSelecionada = useMemo(() => {
     if (chamadaEditando) {
@@ -309,7 +340,7 @@ function Pedagoga() {
     setActivePage(pagina);
     setSidebarOpen(false);
     setMensagem("");
-    if (pagina === "responsaveis") carregarResponsaveis(buscaResponsaveis).catch(console.error);
+    if (pagina === "responsaveis") carregarResponsaveis("").catch(console.error);
   }
 
   async function logout() {
@@ -1014,7 +1045,7 @@ function Pedagoga() {
                   Buscar
                 </button>
               </div>
-              <small>{responsaveis.length} vínculo(s) encontrado(s). Pressione Enter para ir direto ao primeiro resultado.</small>
+              <small>{responsaveisFiltrados.length} vínculo(s) encontrado(s). A busca abre somente as turmas com resultado.</small>
             </form>
 
             {responsaveisPorTurma.length === 0 && (
@@ -1060,7 +1091,7 @@ function Pedagoga() {
                             ref={(elemento) => {
                               if (elemento) responsaveisRefs.current[chaveResponsavel] = elemento;
                             }}
-                            className={responsavelDestacado === chaveResponsavel ? "responsavel-destacado" : ""}
+                            className={buscaResponsaveisAtiva || responsavelDestacado === chaveResponsavel ? "responsavel-destacado" : ""}
                           >
                             <td>{resp.nome}</td>
                             <td>{resp.contato}</td>
