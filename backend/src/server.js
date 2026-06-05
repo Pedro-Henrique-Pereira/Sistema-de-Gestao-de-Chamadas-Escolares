@@ -51,6 +51,9 @@ const FRONTEND_URLS_EXTRAS = String(process.env.FRONTEND_URLS_EXTRAS || "")
 
 const origensPermitidas = new Set([
   FRONTEND_URL,
+  "https://www.lysimaco.com.br",
+  "https://lysimaco.com.br",
+  "https://sistema-de-gestao-de-chamadas-escol.vercel.app",
   "http://192.168.0.13:5173",
   "http://192.168.0.13:4173",
   "http://localhost:5173",
