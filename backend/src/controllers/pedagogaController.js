@@ -1,6 +1,7 @@
 const db = require("../database/db");
 const { formatarNome } = require("../utils/formatadores");
 const { garantirColunasAtraso, normalizarHorarioAtraso, normalizarDataHoraAtraso } = require("../utils/atrasoUtils");
+const { dataBrasiliaISO, horarioBrasilia, dataHoraBrasiliaMySQL } = require("../utils/brasiliaTime");
 
 const MATERIA_PEDAGOGICA = "Chamada Pedagógica";
 const MOTIVO_PADRAO_JUSTIFICATIVA = "Justificado em triagem pedagógica";
@@ -28,9 +29,7 @@ function sanitizarAutomacao(row) {
 
 
 function hojeLocalISO() {
-  const agora = new Date();
-  const offset = agora.getTimezoneOffset() * 60000;
-  return new Date(agora.getTime() - offset).toISOString().slice(0, 10);
+  return dataBrasiliaISO();
 }
 
 function parseAlunos(valor) {
@@ -174,8 +173,9 @@ function montarAlunosJSON(alunos = []) {
 async function dashboard(req, res, next) {
   try {
     const data = req.query.data || hojeLocalISO();
+    const incluirAlunosAtrasados = String(req.query.incluirAlunosAtrasados || req.query.incluir_alunos_atrasados || "") === "1";
 
-    const [[turmas], [resumoConfirmadas], [resumoPendentes], [resumoPorTurma], [pendentesPorTurma]] = await Promise.all([
+    const consultasDashboard = [
       db.execute(
         `
         SELECT t.id, t.nome, COUNT(a.id) AS total_alunos
@@ -232,7 +232,38 @@ async function dashboard(req, res, next) {
         `,
         [data]
       ),
-    ]);
+    ];
+
+    if (incluirAlunosAtrasados) {
+      consultasDashboard.push(
+        db.execute(
+          `
+          SELECT
+            f.id,
+            f.aluno_id AS alunoId,
+            f.aluno_nome AS nome,
+            f.turma_id AS turmaId,
+            f.turma_nome AS turma,
+            f.status,
+            f.atrasado,
+            TIME_FORMAT(rcc.horario_chamada, '%H:%i:%s') AS horarioChamada,
+            TIME_FORMAT(f.horario_registro_atraso, '%H:%i:%s') AS horarioRegistroAtraso,
+            GREATEST(TIMESTAMPDIFF(MINUTE, rcc.horario_chamada, f.horario_registro_atraso), 0) AS minutosAtraso,
+            DATE_FORMAT(f.atraso_registrado_em, '%Y-%m-%d %H:%i:%s') AS atrasoRegistradoEm,
+            DATE_FORMAT(f.data_chamada, '%Y-%m-%d') AS dataChamada
+          FROM registros_frequencia_alunos f
+          INNER JOIN registros_chamadas_confirmadas rcc ON rcc.id = f.registro_chamada_id
+          WHERE rcc.data_chamada = ?
+            AND f.atrasado = TRUE
+          ORDER BY f.turma_nome ASC, f.horario_registro_atraso ASC, f.aluno_nome ASC
+          `,
+          [data]
+        )
+      );
+    }
+
+    const [[turmas], [resumoConfirmadas], [resumoPendentes], [resumoPorTurma], [pendentesPorTurma], alunosAtrasadosResult = []] = await Promise.all(consultasDashboard);
+    const alunosAtrasadosRows = alunosAtrasadosResult[0] || [];
 
     const confirmadas = resumoConfirmadas[0] || {};
     const totalPresentes = Number(confirmadas.totalPresentes || 0);
@@ -291,6 +322,10 @@ async function dashboard(req, res, next) {
         totalAtrasos,
         taxaFrequencia: totalLancamentos > 0 ? Math.round((totalPresentes / totalLancamentos) * 100) : 0,
       },
+      alunosAtrasados: alunosAtrasadosRows.map((aluno) => ({
+        ...aluno,
+        atrasado: Boolean(aluno.atrasado),
+      })),
       turmas: turmasDoDia,
     });
   } catch (error) {
@@ -346,7 +381,9 @@ async function detalharChamadaConfirmada(req, res, next) {
 
     const [chamadas] = await db.execute(
       `
-      SELECT *
+      SELECT id, chamada_diaria_id_origem, professor_id, professor_nome, pedagoga_id, pedagoga_nome,
+             turma_id, turma_nome, materia, data_chamada, horario_chamada,
+             total_presentes, total_ausentes, total_justificados, total_atrasos, observacao, confirmado_em
       FROM registros_chamadas_confirmadas
       WHERE id = ? AND data_chamada = ?
       LIMIT 1
@@ -409,13 +446,14 @@ async function confirmarChamada(req, res, next) {
 
     const [chamadas] = await connection.execute(
       `
-      SELECT *
+      SELECT id, turma_id, turma_nome, professor_id, professor_nome, materia, data_chamada,
+             horario_chamada, alunos, total_presentes, total_ausentes, status
       FROM chamadas_diarias
-      WHERE id = ? AND data_chamada = CURDATE() AND status = 'pendente'
+      WHERE id = ? AND data_chamada = ? AND status = 'pendente'
       LIMIT 1
       FOR UPDATE
       `,
-      [chamadaId]
+      [chamadaId, dataBrasiliaISO()]
     );
 
     const chamada = chamadas[0];
@@ -580,11 +618,11 @@ async function atualizarFrequenciaAluno(req, res, next) {
       SELECT f.*, r.data_chamada
       FROM registros_frequencia_alunos f
       INNER JOIN registros_chamadas_confirmadas r ON r.id = f.registro_chamada_id
-      WHERE f.id = ? AND r.data_chamada = CURDATE()
+      WHERE f.id = ? AND r.data_chamada = ?
       LIMIT 1
       FOR UPDATE
       `,
-      [frequenciaId]
+      [frequenciaId, dataBrasiliaISO()]
     );
 
     const frequencia = frequencias[0];
@@ -599,11 +637,11 @@ async function atualizarFrequenciaAluno(req, res, next) {
       UPDATE registros_frequencia_alunos
       SET status = ?,
           atrasado = ?,
-          horario_registro_atraso = CASE WHEN ? = 1 THEN COALESCE(horario_registro_atraso, CURTIME()) ELSE NULL END,
-          atraso_registrado_em = CASE WHEN ? = 1 THEN COALESCE(atraso_registrado_em, NOW()) ELSE NULL END
+          horario_registro_atraso = CASE WHEN ? = 1 THEN COALESCE(horario_registro_atraso, ?) ELSE NULL END,
+          atraso_registrado_em = CASE WHEN ? = 1 THEN COALESCE(atraso_registrado_em, ?) ELSE NULL END
       WHERE id = ?
       `,
-      [status, atrasado ? 1 : 0, atrasado ? 1 : 0, atrasado ? 1 : 0, frequenciaId]
+      [status, atrasado ? 1 : 0, atrasado ? 1 : 0, horarioBrasilia(), atrasado ? 1 : 0, dataHoraBrasiliaMySQL(), frequenciaId]
     );
 
     await connection.execute("DELETE FROM justificativas_frequencia WHERE frequencia_aluno_id = ?", [frequenciaId]);
@@ -636,7 +674,7 @@ async function atualizarFrequenciaAluno(req, res, next) {
       `
       UPDATE registros_chamadas_confirmadas
       SET total_presentes = ?, total_ausentes = ?, total_justificados = ?, total_atrasos = ?
-      WHERE id = ? AND data_chamada = CURDATE()
+      WHERE id = ? AND data_chamada = ?
       `,
       [
         Number(totais.total_presentes || 0),
@@ -644,6 +682,7 @@ async function atualizarFrequenciaAluno(req, res, next) {
         Number(totais.total_justificados || 0),
         Number(totais.total_atrasos || 0),
         frequencia.registro_chamada_id,
+        dataBrasiliaISO(),
       ]
     );
 
@@ -770,8 +809,8 @@ async function atualizarChamada(req, res, next) {
     const alunosPreparados = prepararAlunosParaConfirmacao(alunos);
 
     const [chamadasAtuais] = await db.execute(
-      "SELECT turma_id FROM chamadas_diarias WHERE id = ? AND status = 'pendente' AND data_chamada = CURDATE() LIMIT 1",
-      [chamadaId]
+      "SELECT turma_id FROM chamadas_diarias WHERE id = ? AND status = 'pendente' AND data_chamada = ? LIMIT 1",
+      [chamadaId, dataBrasiliaISO()]
     );
     if (!chamadasAtuais[0]) return res.status(404).json({ erro: "Chamada pendente de hoje não encontrada." });
 
@@ -782,9 +821,9 @@ async function atualizarChamada(req, res, next) {
       `
       UPDATE chamadas_diarias
       SET materia = ?, alunos = ?, total_presentes = ?, total_ausentes = ?
-      WHERE id = ? AND status = 'pendente' AND data_chamada = CURDATE()
+      WHERE id = ? AND status = 'pendente' AND data_chamada = ?
       `,
-      [materia, JSON.stringify(alunos), totais.total_presentes, totais.total_ausentes, chamadaId]
+      [materia, JSON.stringify(alunos), totais.total_presentes, totais.total_ausentes, chamadaId, dataBrasiliaISO()]
     );
 
     if (result.affectedRows === 0) return res.status(404).json({ erro: "Chamada pendente de hoje não encontrada." });
@@ -795,8 +834,27 @@ async function atualizarChamada(req, res, next) {
   }
 }
 
+function normalizarPaginacaoLista(query = {}) {
+  const paginaAtual = Math.max(Number.parseInt(query.page, 10) || 1, 1);
+  const limitRecebido = Number.parseInt(query.limit, 10) || 50;
+  const limite = Math.min(Math.max(limitRecebido, 1), 100);
+  const offset = (paginaAtual - 1) * limite;
+  return { paginaAtual, limite, offset };
+}
+
+function montarMetaLista(totalRegistros, paginaAtual, limite) {
+  const total = Number(totalRegistros || 0);
+  return {
+    totalRegistros: total,
+    paginaAtual,
+    totalPaginas: Math.max(Math.ceil(total / limite), 1),
+    limite,
+  };
+}
+
 async function responsaveis(req, res, next) {
   try {
+    const { paginaAtual, limite, offset } = normalizarPaginacaoLista(req.query);
     const busca = String(req.query.busca || "").trim().slice(0, 80);
     const filtros = [];
     const parametros = [];
@@ -807,12 +865,26 @@ async function responsaveis(req, res, next) {
         AND (
           LOWER(r.nome) LIKE ?
           OR LOWER(a.nome) LIKE ?
+          OR LOWER(t.nome) LIKE ?
           OR LOWER(r.contato) LIKE ?
           OR REPLACE(REPLACE(REPLACE(REPLACE(r.contato, ' ', ''), '-', ''), '(', ''), ')', '') LIKE ?
         )
       `);
-      parametros.push(termo, termo, termo, `%${busca.replace(/\D/g, "") || busca}%`);
+      parametros.push(termo, termo, termo, termo, `%${busca.replace(/\D/g, "") || busca}%`);
     }
+
+    const whereClause = `WHERE 1 = 1 ${filtros.join("\n")}`;
+
+    const [[totalRow]] = await db.execute(
+      `
+      SELECT COUNT(*) AS total
+      FROM responsaveis r
+      INNER JOIN alunos a ON a.id = r.aluno_id
+      LEFT JOIN turmas t ON t.id = a.turma_id
+      ${whereClause}
+      `,
+      parametros
+    );
 
     const [rows] = await db.execute(
       `
@@ -828,10 +900,9 @@ async function responsaveis(req, res, next) {
       FROM responsaveis r
       INNER JOIN alunos a ON a.id = r.aluno_id
       LEFT JOIN turmas t ON t.id = a.turma_id
-      WHERE 1 = 1
-        ${filtros.join("\n")}
-      ORDER BY t.nome ASC, r.nome ASC, a.nome ASC
-      LIMIT 500
+      ${whereClause}
+      ORDER BY t.nome ASC, r.nome ASC, a.nome ASC, r.id ASC
+      LIMIT ${limite} OFFSET ${offset}
       `,
       parametros
     );
@@ -856,7 +927,12 @@ async function responsaveis(req, res, next) {
       grupos.set(chave, atual);
     });
 
-    return res.json({ responsaveis: Array.from(grupos.values()) });
+    const lista = Array.from(grupos.values());
+    return res.json({
+      responsaveis: lista,
+      dados: lista,
+      ...montarMetaLista(totalRow.total, paginaAtual, limite),
+    });
   } catch (error) {
     return next(error);
   }
@@ -1032,7 +1108,7 @@ async function criarSolicitacaoFilaFaltas(connection, usuario, maquinaDestino, o
       status,
       data_solicitacao
     )
-    VALUES (?, ?, ?, 'faltas', ?, ?, 'pendente', NOW())
+    VALUES (?, ?, ?, 'faltas', ?, ?, 'pendente', ?)
     `,
     [
       usuario.id,
@@ -1040,6 +1116,7 @@ async function criarSolicitacaoFilaFaltas(connection, usuario, maquinaDestino, o
       maquinaDestino,
       mensagem,
       JSON.stringify({ origem, ...payload }),
+      dataHoraBrasiliaMySQL(),
     ]
   );
 

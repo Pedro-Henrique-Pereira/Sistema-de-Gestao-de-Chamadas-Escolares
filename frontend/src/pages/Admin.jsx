@@ -4,22 +4,44 @@ import { apiFetch } from "../services/api";
 import { buscarConfiguracaoEscola, salvarConfiguracaoEscola } from "../services/configuracoesEscolaService";
 import RelatoriosAvancados from "./RelatoriosAvancados";
 import MensagensAdmin from "./MensagensAdmin";
+import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
 import "../styles/Admin.css";
 
 export default function Administrador() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [telaAtiva, setTelaAtiva] = useState("painel");
+  const [abaPainel, setAbaPainel] = useState("geral");
 
   const [usuarioLogado, setUsuarioLogado] = useState(null);
 
   const [abaRegistros, setAbaRegistros] = useState("alunos");
   const [pesquisaAluno, setPesquisaAluno] = useState("");
   const [pesquisaAlunoDebounced, setPesquisaAlunoDebounced] = useState("");
+  const [paginaAlunos, setPaginaAlunos] = useState(1);
+  const [metaAlunos, setMetaAlunos] = useState({ totalRegistros: 0, paginaAtual: 1, totalPaginas: 1, limite: 50 });
   const [turmasAbertas, setTurmasAbertas] = useState({});
   const [alunosAbertos, setAlunosAbertos] = useState({});
   const [alunoDestacadoId, setAlunoDestacadoId] = useState(null);
   const primeiraBuscaAplicadaRef = useRef(false);
   const linhaAlunoRefs = useRef({});
+  const cacheRef = useRef({
+    dashboardCarregado: false,
+    configAtrasoCarregada: false,
+    mensagemWhatsappCarregada: false,
+    preferenciasCarregadas: false,
+    chamadasCarregadas: false,
+    responsaveisCarregados: false,
+    relatoriosCarregados: false,
+    filtrosCarregados: false,
+    registrosCarregados: false,
+    paginasAlunos: {},
+  });
+  const requisicoesEmAndamentoRef = useRef({
+    painel: false,
+    registros: false,
+    relatorios: false,
+    configuracoes: false,
+  });
 
   const [modalAluno, setModalAluno] = useState(null);
   const [modalTurma, setModalTurma] = useState(false);
@@ -35,21 +57,70 @@ export default function Administrador() {
     ausentes: 0,
     justificados: 0,
     atrasos: 0,
+    alunosAtrasados: [],
   });
   const [salvandoConfig, setSalvandoConfig] = useState(false);
   const [mensagemConfig, setMensagemConfig] = useState("");
   const [horarioLimiteAtraso, setHorarioLimiteAtraso] = useState("07:45");
   const [tempoMaximoJustificativasMeses, setTempoMaximoJustificativasMeses] = useState(1);
 
-  async function carregarRegistros() {
+  function montarChaveCacheAlunos(page = paginaAlunos, busca = pesquisaAlunoDebounced) {
+    return `alunos:${page}:${String(busca || "").trim().toLowerCase()}`;
+  }
+
+  async function carregarAlunosPaginados({ page = paginaAlunos, busca = pesquisaAlunoDebounced, forcarAtualizacao = false } = {}) {
+    const chaveCache = montarChaveCacheAlunos(page, busca);
+    const cacheAlunos = cacheRef.current.paginasAlunos || {};
+
+    if (!forcarAtualizacao && cacheAlunos[chaveCache]) {
+      setAlunos(cacheAlunos[chaveCache].alunos || []);
+      setMetaAlunos(cacheAlunos[chaveCache].meta || { totalRegistros: 0, paginaAtual: page, totalPaginas: 1, limite: 50 });
+      return cacheAlunos[chaveCache];
+    }
+
     setCarregandoRegistros(true);
     setErroRegistros("");
 
     try {
-      const data = await apiFetch("/api/registros");
-      setTurmas(data.turmas || []);
-      setAlunos(data.alunos || []);
-      setEquipe(data.equipe || []);
+      const data = await apiFetch("/api/registros/alunos", {
+        params: { page, limit: 50, busca },
+      });
+      const alunosPagina = data.alunos || data.dados || [];
+      const meta = {
+        totalRegistros: Number(data.totalRegistros || alunosPagina.length || 0),
+        paginaAtual: Number(data.paginaAtual || page),
+        totalPaginas: Number(data.totalPaginas || 1),
+        limite: Number(data.limite || 50),
+      };
+
+      setAlunos(alunosPagina);
+      setMetaAlunos(meta);
+      cacheRef.current.paginasAlunos = {
+        ...(cacheRef.current.paginasAlunos || {}),
+        [chaveCache]: { alunos: alunosPagina, meta },
+      };
+      return { alunos: alunosPagina, meta };
+    } catch (error) {
+      setErroRegistros(error.message || "Erro ao carregar alunos.");
+      return null;
+    } finally {
+      setCarregandoRegistros(false);
+    }
+  }
+
+  async function carregarRegistrosCompletos({ forcarAtualizacao = false } = {}) {
+    setCarregandoRegistros(true);
+    setErroRegistros("");
+
+    try {
+      const [turmasData, equipeData] = await Promise.all([
+        apiFetch("/api/registros/turmas"),
+        apiFetch("/api/registros/equipe"),
+      ]);
+
+      setTurmas(turmasData.turmas || []);
+      setEquipe(equipeData.equipe || []);
+      await carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced, forcarAtualizacao });
     } catch (error) {
       setErroRegistros(error.message || "Erro ao carregar registros.");
     } finally {
@@ -61,16 +132,36 @@ export default function Administrador() {
   async function carregarMetricasPainel() {
     try {
       const data = await apiFetch("/api/admin/painel");
-      setMetricasDia({
+      setMetricasDia((metricasAtuais) => ({
         alunosCadastrados: Number(data.alunosCadastrados || 0),
         presentes: Number(data.presentes || 0),
         ausentes: Number(data.ausentes || 0),
         justificados: Number(data.justificados || 0),
         atrasos: Number(data.atrasos || 0),
-      });
+        alunosAtrasados: metricasAtuais.alunosAtrasados || [],
+      }));
     } catch (error) {
       console.error("Erro ao carregar métricas do painel:", error);
     }
+  }
+
+  async function carregarAlunosAtrasadosPainel() {
+    const data = await apiFetch("/api/admin/painel", {
+      params: { incluirAlunosAtrasados: 1 },
+    });
+
+    const lista = Array.isArray(data.alunosAtrasados) ? data.alunosAtrasados : [];
+
+    setMetricasDia({
+      alunosCadastrados: Number(data.alunosCadastrados || 0),
+      presentes: Number(data.presentes || 0),
+      ausentes: Number(data.ausentes || 0),
+      justificados: Number(data.justificados || 0),
+      atrasos: Number(data.atrasos || 0),
+      alunosAtrasados: lista,
+    });
+
+    return lista;
   }
 
   async function carregarConfiguracaoEscola() {
@@ -81,6 +172,60 @@ export default function Administrador() {
     } catch (error) {
       console.error("Erro ao carregar configuração da escola:", error);
     }
+  }
+
+  async function carregarTelaSobDemanda(tela, opcoes = {}) {
+    const forcarAtualizacao = Boolean(opcoes.forcarAtualizacao);
+    const cache = cacheRef.current;
+
+    if (!forcarAtualizacao && requisicoesEmAndamentoRef.current[tela]) return;
+
+    try {
+      requisicoesEmAndamentoRef.current[tela] = true;
+
+      if (tela === "painel") {
+        const tarefas = [];
+        if (forcarAtualizacao || !cache.dashboardCarregado) tarefas.push(carregarMetricasPainel());
+        if (forcarAtualizacao || !cache.configAtrasoCarregada) tarefas.push(carregarConfiguracaoEscola());
+
+        if (tarefas.length) await Promise.all(tarefas);
+
+        cache.dashboardCarregado = true;
+        cache.configAtrasoCarregada = true;
+        return;
+      }
+
+      if (tela === "registros") {
+        if (forcarAtualizacao || !cache.registrosCarregados || !cache.filtrosCarregados) {
+          await carregarRegistrosCompletos({ forcarAtualizacao });
+          cache.registrosCarregados = true;
+          cache.filtrosCarregados = true;
+        }
+        return;
+      }
+
+      if (tela === "relatorios") {
+        cache.relatoriosCarregados = true;
+        return;
+      }
+
+      if (tela === "configuracoes") {
+        if (forcarAtualizacao || !cache.configAtrasoCarregada) {
+          await carregarConfiguracaoEscola();
+          cache.configAtrasoCarregada = true;
+        }
+      }
+    } catch (error) {
+      console.error("Erro ao carregar dados da tela:", error);
+    } finally {
+      requisicoesEmAndamentoRef.current[tela] = false;
+    }
+  }
+
+  function trocarTela(tela) {
+    setTelaAtiva(tela);
+    fecharSidebarMobile();
+    carregarTelaSobDemanda(tela).catch(console.error);
   }
 
   async function handleSalvarHorarioLimite(event) {
@@ -96,6 +241,7 @@ export default function Administrador() {
       setHorarioLimiteAtraso(String(data.horarioLimiteAtraso || horarioLimiteAtraso).slice(0, 5));
       setTempoMaximoJustificativasMeses(Number(data.tempoMaximoJustificativasMeses || tempoMaximoJustificativasMeses));
       setMensagemConfig("Configurações da escola salvas com sucesso.");
+      cacheRef.current.configAtrasoCarregada = true;
     } catch (error) {
       setMensagemConfig(error.message || "Erro ao salvar horário máximo de chegada.");
     } finally {
@@ -116,6 +262,7 @@ export default function Administrador() {
       });
       setTempoMaximoJustificativasMeses(Number(data.tempoMaximoJustificativasMeses || tempoMaximoJustificativasMeses));
       setMensagemConfig("Tempo máximo de armazenamento das justificativas salvo com sucesso.");
+      cacheRef.current.configAtrasoCarregada = true;
     } catch (error) {
       setMensagemConfig(error.message || "Erro ao salvar tempo máximo das justificativas.");
     } finally {
@@ -128,7 +275,9 @@ export default function Administrador() {
       try {
         const data = await apiFetch("/api/auth/me");
         setUsuarioLogado(data.usuario);
-        await Promise.all([carregarRegistros(), carregarMetricasPainel(), carregarConfiguracaoEscola()]);
+        await Promise.all([carregarMetricasPainel(), carregarConfiguracaoEscola()]);
+        cacheRef.current.dashboardCarregado = true;
+        cacheRef.current.configAtrasoCarregada = true;
       } catch (error) {
         window.location.href = "/login";
       }
@@ -199,21 +348,7 @@ const pesquisaAlunoAtiva = useMemo(
   [termoPesquisaAluno, pesquisaAlunoDebounced]
 );
 
-const alunosFiltrados = useMemo(() => {
-  const digitosBusca = apenasDigitosBusca(pesquisaAlunoDebounced);
-
-  if (!pesquisaAlunoAtiva) return alunos;
-
-  return alunos
-    .map((aluno, indice) => ({
-      aluno,
-      indice,
-      pontuacao: pontuarPesquisaAluno(aluno, termoPesquisaAluno, digitosBusca),
-    }))
-    .filter((item) => item.pontuacao > 0)
-    .sort((a, b) => b.pontuacao - a.pontuacao || a.indice - b.indice)
-    .map((item) => item.aluno);
-}, [alunos, termoPesquisaAluno, pesquisaAlunoDebounced]);
+const alunosFiltrados = useMemo(() => alunos, [alunos]);
 
 const alunosPorTurma = useMemo(() => {
   const grupos = turmas.map((turma) => ({
@@ -234,11 +369,17 @@ const alunosSemTurma = useMemo(
 
 useEffect(() => {
   const timer = window.setTimeout(() => {
+    setPaginaAlunos(1);
     setPesquisaAlunoDebounced(pesquisaAluno);
-  }, 300);
+  }, 500);
 
   return () => window.clearTimeout(timer);
 }, [pesquisaAluno]);
+
+useEffect(() => {
+  if (telaAtiva !== "registros" || abaRegistros !== "alunos") return;
+  carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced }).catch(console.error);
+}, [telaAtiva, abaRegistros, paginaAlunos, pesquisaAlunoDebounced]);
 
 useEffect(() => {
   if (abaRegistros !== "alunos") return;
@@ -349,7 +490,8 @@ async function handleCadastrarAluno(event) {
       body: JSON.stringify(novoAluno),
     });
 
-    setAlunos(data.alunos || []);
+    cacheRef.current.paginasAlunos = {};
+    await carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced, forcarAtualizacao: true });
     setModalAluno(null);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao cadastrar aluno.");
@@ -381,7 +523,8 @@ async function handleEditarAluno(event) {
       body: JSON.stringify(alunoEditado),
     });
 
-    setAlunos(data.alunos || []);
+    cacheRef.current.paginasAlunos = {};
+    await carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced, forcarAtualizacao: true });
     setModalAluno(null);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao editar aluno.");
@@ -396,7 +539,8 @@ async function handleRemoverAluno(idAluno) {
       method: "DELETE",
     });
 
-    setAlunos(data.alunos || []);
+    cacheRef.current.paginasAlunos = {};
+    await carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced, forcarAtualizacao: true });
     setConfirmacao(null);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao remover aluno.");
@@ -427,7 +571,8 @@ async function salvarTurmaAluno(idAluno, novaTurma) {
       body: JSON.stringify({ turma: novaTurma }),
     });
 
-    setAlunos(data.alunos || []);
+    cacheRef.current.paginasAlunos = {};
+    await carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced, forcarAtualizacao: true });
   } catch (error) {
     setErroRegistros(error.message || "Erro ao alterar turma do aluno.");
   }
@@ -461,7 +606,10 @@ async function handleCriarTurma(event) {
       });
     }
 
-    await carregarRegistros();
+    cacheRef.current.paginasAlunos = {};
+    await carregarRegistrosCompletos({ forcarAtualizacao: true });
+    cacheRef.current.registrosCarregados = true;
+    cacheRef.current.filtrosCarregados = true;
     setModalTurma(false);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao criar turma.");
@@ -481,7 +629,10 @@ async function handleEditarTurma(event) {
     });
 
     setTurmas(data.turmas || []);
-    await carregarRegistros();
+    cacheRef.current.paginasAlunos = {};
+    await carregarRegistrosCompletos({ forcarAtualizacao: true });
+    cacheRef.current.registrosCarregados = true;
+    cacheRef.current.filtrosCarregados = true;
     setModalTurma(false);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao editar turma.");
@@ -497,7 +648,8 @@ async function handleRemoverTurma(idTurma) {
     });
 
     setTurmas(data.turmas || []);
-    setAlunos(data.alunos || []);
+    cacheRef.current.paginasAlunos = {};
+    await carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced, forcarAtualizacao: true });
     setConfirmacao(null);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao remover turma.");
@@ -620,40 +772,29 @@ async function handleRemoverEquipe(idPessoa) {
         <nav className="admin-menu">
           <button
             className={telaAtiva === "painel" ? "active" : ""}
-            onClick={() => {
-              setTelaAtiva("painel");
-              fecharSidebarMobile();
-            }}
+            onClick={() => trocarTela("painel")}
           >
             Painel Principal
           </button>
 
+
           <button
             className={telaAtiva === "registros" ? "active" : ""}
-            onClick={() => {
-              setTelaAtiva("registros");
-              fecharSidebarMobile();
-            }}
+            onClick={() => trocarTela("registros")}
           >
             Gestão de Registros
           </button>
 
           <button
             className={telaAtiva === "relatorios" ? "active" : ""}
-            onClick={() => {
-              setTelaAtiva("relatorios");
-              fecharSidebarMobile();
-            }}
+            onClick={() => trocarTela("relatorios")}
           >
             Relatórios Avançados
           </button>
 
           <button
             className={telaAtiva === "mensagens" ? "active" : ""}
-            onClick={() => {
-              setTelaAtiva("mensagens");
-              fecharSidebarMobile();
-            }}
+            onClick={() => trocarTela("mensagens")}
           >
             Mensagens
           </button>
@@ -661,10 +802,7 @@ async function handleRemoverEquipe(idPessoa) {
 
           <button
             className={telaAtiva === "configuracoes" ? "active" : ""}
-            onClick={() => {
-              setTelaAtiva("configuracoes");
-              fecharSidebarMobile();
-            }}
+            onClick={() => trocarTela("configuracoes")}
           >
             Configurações
           </button>
@@ -723,114 +861,144 @@ async function handleRemoverEquipe(idPessoa) {
               <p>Indicadores institucionais consolidados do dia atual.</p>
             </div>
 
-            <div className="admin-cards-grid">
-              <article className="admin-card">
-                <span>Alunos cadastrados</span>
-                <strong>{metricasDia.alunosCadastrados}</strong>
-              </article>
-
-              <article className="admin-card">
-                <span>Presenças</span>
-                <strong>{metricasDia.presentes}</strong>
-              </article>
-
-              <article className="admin-card">
-                <span>Ausências</span>
-                <strong>{metricasDia.ausentes}</strong>
-              </article>
-
-              <article className="admin-card">
-                <span>Justificados</span>
-                <strong>{metricasDia.justificados}</strong>
-              </article>
-
-              <article className="admin-card">
-                <span>Atraso</span>
-                <strong>{metricasDia.atrasos}</strong>
-              </article>
-            </div>
-
-
-
-            <form className="chart-card atraso-config-card" onSubmit={handleSalvarHorarioLimite}>
-              <h3>Horário Máximo de Chegada</h3>
-              <p>Defina o horário máximo para chegada do aluno. Após esse limite, o registro permanece como ausência.</p>
-
-              <label className="admin-time-config">
-                Horário máximo de chegada
-                <input
-                  type="time"
-                  value={horarioLimiteAtraso}
-                  onChange={(event) => setHorarioLimiteAtraso(event.target.value)}
-                  required
-                />
-              </label>
-
-              <label className="admin-time-config">
-                Tempo máximo de justificativas
-                <select
-                  value={tempoMaximoJustificativasMeses}
-                  onChange={(event) => setTempoMaximoJustificativasMeses(Number(event.target.value))}
-                  required
-                >
-                  <option value={1}>1 mês</option>
-                  <option value={2}>2 meses</option>
-                  <option value={3}>3 meses</option>
-                </select>
-              </label>
-
-              <button className="admin-primary-btn" type="submit" disabled={salvandoConfig}>
-                {salvandoConfig ? "Processando..." : "Atualizar horário"}
+            <div className="dashboard-tab-toggle" role="tablist" aria-label="Alternar visão do painel administrativo">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={abaPainel === "geral"}
+                className={abaPainel === "geral" ? "active" : ""}
+                onClick={() => setAbaPainel("geral")}
+              >
+                Visão Geral
               </button>
-
-              {mensagemConfig && <p className="admin-config-message">{mensagemConfig}</p>}
-            </form>
-
-            <div className="chart-card">
-              <h3>Distribuição dos indicadores diários</h3>
-
-              <div className="chart-bars">
-                <div>
-                  <div
-                    className="bar green"
-                    style={{ height: `${porcentagemPresenca * 2.5}px` }}
-                  >
-                    {porcentagemPresenca}%
-                  </div>
-                  <span>Presenças</span>
-                </div>
-
-                <div>
-                  <div
-                    className="bar red"
-                    style={{ height: `${porcentagemAusencia * 2.5}px` }}
-                  >
-                    {porcentagemAusencia}%
-                  </div>
-                  <span>Ausências</span>
-                </div>
-
-                <div>
-                  <div
-                    className="bar blue"
-                    style={{ height: `${porcentagemJustificada * 2.5}px` }}
-                  >
-                    {porcentagemJustificada}%
-                  </div>
-                  <span>Justificados</span>
-                </div>
-
-                <div>
-                  <div
-                    className="bar yellow"
-                    style={{ height: `${porcentagemAtraso * 2.5}px` }}
-                  >
-                    {porcentagemAtraso}%
-                  </div>
-                  <span>Atraso</span>
-                </div>
-              </div>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={abaPainel === "atrasos"}
+                className={abaPainel === "atrasos" ? "active" : ""}
+                onClick={() => setAbaPainel("atrasos")}
+              >
+                Painel de Atrasos
+              </button>
             </div>
+
+            {abaPainel === "geral" ? (
+              <>
+                <div className="admin-cards-grid">
+                  <article className="admin-card">
+                    <span>Alunos cadastrados</span>
+                    <strong>{metricasDia.alunosCadastrados}</strong>
+                  </article>
+
+                  <article className="admin-card">
+                    <span>Presenças</span>
+                    <strong>{metricasDia.presentes}</strong>
+                  </article>
+
+                  <article className="admin-card">
+                    <span>Ausências</span>
+                    <strong>{metricasDia.ausentes}</strong>
+                  </article>
+
+                  <article className="admin-card">
+                    <span>Justificados</span>
+                    <strong>{metricasDia.justificados}</strong>
+                  </article>
+
+                  <article className="admin-card">
+                    <span>Atraso</span>
+                    <strong>{metricasDia.atrasos}</strong>
+                  </article>
+                </div>
+
+                <form className="chart-card atraso-config-card" onSubmit={handleSalvarHorarioLimite}>
+                  <h3>Horário Máximo de Chegada</h3>
+                  <p>Defina o horário máximo para chegada do aluno. Após esse limite, o registro permanece como ausência.</p>
+
+                  <label className="admin-time-config">
+                    Horário máximo de chegada
+                    <input
+                      type="time"
+                      value={horarioLimiteAtraso}
+                      onChange={(event) => setHorarioLimiteAtraso(event.target.value)}
+                      required
+                    />
+                  </label>
+
+                  <label className="admin-time-config">
+                    Tempo máximo de justificativas
+                    <select
+                      value={tempoMaximoJustificativasMeses}
+                      onChange={(event) => setTempoMaximoJustificativasMeses(Number(event.target.value))}
+                      required
+                    >
+                      <option value={1}>1 mês</option>
+                      <option value={2}>2 meses</option>
+                      <option value={3}>3 meses</option>
+                    </select>
+                  </label>
+
+                  <button className="admin-primary-btn" type="submit" disabled={salvandoConfig}>
+                    {salvandoConfig ? "Processando..." : "Atualizar horário"}
+                  </button>
+
+                  {mensagemConfig && <p className="admin-config-message">{mensagemConfig}</p>}
+                </form>
+
+                <div className="chart-card">
+                  <h3>Distribuição dos indicadores diários</h3>
+
+                  <div className="chart-bars">
+                    <div>
+                      <div
+                        className="bar green"
+                        style={{ height: `${porcentagemPresenca * 2.5}px` }}
+                      >
+                        {porcentagemPresenca}%
+                      </div>
+                      <span>Presenças</span>
+                    </div>
+
+                    <div>
+                      <div
+                        className="bar red"
+                        style={{ height: `${porcentagemAusencia * 2.5}px` }}
+                      >
+                        {porcentagemAusencia}%
+                      </div>
+                      <span>Ausências</span>
+                    </div>
+
+                    <div>
+                      <div
+                        className="bar blue"
+                        style={{ height: `${porcentagemJustificada * 2.5}px` }}
+                      >
+                        {porcentagemJustificada}%
+                      </div>
+                      <span>Justificados</span>
+                    </div>
+
+                    <div>
+                      <div
+                        className="bar yellow"
+                        style={{ height: `${porcentagemAtraso * 2.5}px` }}
+                      >
+                        {porcentagemAtraso}%
+                      </div>
+                      <span>Atraso</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <AlunosAtrasadosCard
+                alunos={metricasDia.alunosAtrasados}
+                carregarAlunosAtrasados={carregarAlunosAtrasadosPainel}
+                cacheNamespace="admin"
+                horarioLimiteAtraso={horarioLimiteAtraso}
+              />
+            )}
           </section>
         )}
 
@@ -843,7 +1011,7 @@ async function handleRemoverEquipe(idPessoa) {
 
             {erroRegistros && <p className="admin-error-message">{erroRegistros}</p>}
 
-            {carregandoRegistros && <p>Carregando registros institucionais...</p>}
+            {carregandoRegistros && <div className="admin-loading-state">Carregando registros institucionais...</div>}
 
             <div className="admin-tabs">
               <button
@@ -1145,6 +1313,28 @@ async function handleRemoverEquipe(idPessoa) {
                       )}
                     </div>
                   ))}
+                </div>
+
+                <div className="admin-pagination">
+                  <button
+                    className="admin-secondary-btn"
+                    type="button"
+                    disabled={carregandoRegistros || metaAlunos.paginaAtual <= 1}
+                    onClick={() => setPaginaAlunos((pagina) => Math.max(pagina - 1, 1))}
+                  >
+                    Anterior
+                  </button>
+                  <span>
+                    Página {metaAlunos.paginaAtual} de {metaAlunos.totalPaginas} — {metaAlunos.totalRegistros} registro(s)
+                  </span>
+                  <button
+                    className="admin-secondary-btn"
+                    type="button"
+                    disabled={carregandoRegistros || metaAlunos.paginaAtual >= metaAlunos.totalPaginas}
+                    onClick={() => setPaginaAlunos((pagina) => Math.min(pagina + 1, metaAlunos.totalPaginas))}
+                  >
+                    Próxima
+                  </button>
                 </div>
               </div>
             )}

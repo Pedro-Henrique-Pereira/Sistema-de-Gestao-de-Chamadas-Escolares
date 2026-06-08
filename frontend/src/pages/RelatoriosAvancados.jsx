@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiDownload, apiFetch } from "../services/api";
+import { dataBrasiliaISO } from "../utils/brasiliaTime";
 
 const filtrosIniciais = {
   data: "",
@@ -277,7 +278,7 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
       const link = document.createElement("a");
 
       link.href = url;
-      link.download = `relatorio-frequencia-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      link.download = `relatorio-frequencia-${dataBrasiliaISO()}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();

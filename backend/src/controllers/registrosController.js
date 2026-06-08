@@ -75,7 +75,13 @@ async function removerTurma(req, res, next) {
 
 async function listarAlunos(req, res, next) {
   try {
-    res.json({ alunos: await Registros.listarAlunos() });
+    const resultado = await Registros.listarAlunosPaginado({
+      page: req.query.page,
+      limit: req.query.limit,
+      busca: req.query.busca,
+    });
+
+    res.json(resultado);
   } catch (error) {
     next(error);
   }

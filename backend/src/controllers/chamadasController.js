@@ -3,6 +3,7 @@ const { garantirConfiguracao, horarioParaMinutos } = require("./configuracoesEsc
 const { garantirColunasAtraso } = require("../utils/atrasoUtils");
 const chamadaService = require("../services/chamadaService");
 const { safeLogError } = require("../utils/errorHandler");
+const { dataBrasiliaISO, horarioBrasilia, dataHoraBrasiliaMySQL } = require("../utils/brasiliaTime");
 
 const STATUS_VALIDOS = new Set(["presente", "ausente"]);
 
@@ -17,9 +18,7 @@ function atrasoLiberadoPelaConfiguracao(config) {
 }
 
 function hojeLocalISO() {
-  const agora = new Date();
-  const offset = agora.getTimezoneOffset() * 60000;
-  return new Date(agora.getTime() - offset).toISOString().slice(0, 10);
+  return dataBrasiliaISO();
 }
 
 function normalizarMateria(materia) {
@@ -388,8 +387,8 @@ async function marcarAtraso(req, res, next) {
     await chamadaService.validarJanelaAtraso(connection);
 
     const [chamadas] = await connection.execute(
-      `SELECT * FROM chamadas_diarias WHERE id = ? AND data_chamada = CURDATE() LIMIT 1 FOR UPDATE`,
-      [chamadaId]
+      `SELECT id, turma_id, turma_nome, professor_id, professor_nome, materia, data_chamada, horario_chamada, alunos, total_presentes, total_ausentes, status FROM chamadas_diarias WHERE id = ? AND data_chamada = ? LIMIT 1 FOR UPDATE`,
+      [chamadaId, dataBrasiliaISO()]
     );
 
     const chamada = chamadas[0];
@@ -416,7 +415,7 @@ async function marcarAtraso(req, res, next) {
             throw erro;
           }
           alterou = true;
-          return { ...aluno, status_presenca: "presente", status: "presente", atrasado: true, horario_registro_atraso: new Date().toTimeString().slice(0, 8), atraso_registrado_em: new Date().toISOString().slice(0, 19).replace("T", " ") };
+          return { ...aluno, status_presenca: "presente", status: "presente", atrasado: true, horario_registro_atraso: horarioBrasilia(), atraso_registrado_em: dataHoraBrasiliaMySQL() };
         }
         return aluno;
       });
@@ -451,11 +450,11 @@ async function marcarAtraso(req, res, next) {
        FROM registros_frequencia_alunos f
        INNER JOIN registros_chamadas_confirmadas r ON r.id = f.registro_chamada_id
        WHERE f.aluno_id = ?
-         AND r.data_chamada = CURDATE()
+         AND r.data_chamada = ?
          AND (r.chamada_diaria_id_origem = ? OR (r.turma_id = ? AND r.materia = ?))
        LIMIT 1
        FOR UPDATE`,
-      [alunoId, chamadaId, chamada.turma_id, chamada.materia]
+      [alunoId, dataBrasiliaISO(), chamadaId, chamada.turma_id, chamada.materia]
     );
 
     const frequencia = frequencias[0];
@@ -475,10 +474,10 @@ async function marcarAtraso(req, res, next) {
       `UPDATE registros_frequencia_alunos
        SET status = 'presente',
            atrasado = TRUE,
-           horario_registro_atraso = COALESCE(horario_registro_atraso, CURTIME()),
-           atraso_registrado_em = COALESCE(atraso_registrado_em, NOW())
+           horario_registro_atraso = COALESCE(horario_registro_atraso, ?),
+           atraso_registrado_em = COALESCE(atraso_registrado_em, ?)
        WHERE id = ?`,
-      [frequencia.id]
+      [horarioBrasilia(), dataHoraBrasiliaMySQL(), frequencia.id]
     );
 
     const [[totais]] = await connection.execute(

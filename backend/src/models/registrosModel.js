@@ -77,18 +77,25 @@ async function buscarTurmaPorNome(nome) {
   return rows[0] || null;
 }
 
-async function listarAlunos() {
-  const [rows] = await db.execute(`
-    SELECT
-      a.id, a.nome, a.idade, a.turma_id, t.nome AS turma,
-      r.id AS responsavel_id, r.nome AS responsavel_nome,
-      r.parentesco AS responsavel_parentesco, r.contato AS responsavel_contato
-    FROM alunos a
-    LEFT JOIN turmas t ON t.id = a.turma_id
-    LEFT JOIN responsaveis r ON r.aluno_id = a.id
-    ORDER BY t.nome IS NULL, t.nome ASC, a.nome ASC
-  `);
+function normalizarPaginacao({ page = 1, limit = 50 } = {}) {
+  const paginaAtual = Math.max(Number.parseInt(page, 10) || 1, 1);
+  const limitRecebido = Number.parseInt(limit, 10) || 50;
+  const limite = Math.min(Math.max(limitRecebido, 1), 100);
+  const offset = (paginaAtual - 1) * limite;
+  return { paginaAtual, limite, offset };
+}
 
+function montarMetaPaginacao(totalRegistros, paginaAtual, limite) {
+  const total = Number(totalRegistros || 0);
+  return {
+    totalRegistros: total,
+    paginaAtual,
+    totalPaginas: Math.max(Math.ceil(total / limite), 1),
+    limite,
+  };
+}
+
+function agruparAlunosComResponsaveis(rows) {
   const mapa = new Map();
   rows.forEach((row) => {
     if (!mapa.has(row.id)) {
@@ -113,6 +120,94 @@ async function listarAlunos() {
   });
 
   return Array.from(mapa.values());
+}
+
+async function listarAlunos() {
+  const [rows] = await db.execute(`
+    SELECT
+      a.id, a.nome, a.idade, a.turma_id, t.nome AS turma,
+      r.id AS responsavel_id, r.nome AS responsavel_nome,
+      r.parentesco AS responsavel_parentesco, r.contato AS responsavel_contato
+    FROM alunos a
+    LEFT JOIN turmas t ON t.id = a.turma_id
+    LEFT JOIN responsaveis r ON r.aluno_id = a.id
+    ORDER BY t.nome IS NULL, t.nome ASC, a.nome ASC
+  `);
+
+  return agruparAlunosComResponsaveis(rows);
+}
+
+async function listarAlunosPaginado({ page = 1, limit = 50, busca = '' } = {}) {
+  const { paginaAtual, limite, offset } = normalizarPaginacao({ page, limit });
+  const termoBusca = String(busca || '').trim().slice(0, 80);
+  const filtros = [];
+  const parametrosFiltro = [];
+
+  if (termoBusca) {
+    const termo = `%${termoBusca.toLowerCase()}%`;
+    const digitos = termoBusca.replace(/\D/g, '');
+    filtros.push(`
+      AND (
+        LOWER(a.nome) LIKE ?
+        OR LOWER(t.nome) LIKE ?
+        OR LOWER(r.nome) LIKE ?
+        OR LOWER(r.contato) LIKE ?
+        OR REPLACE(REPLACE(REPLACE(REPLACE(r.contato, ' ', ''), '-', ''), '(', ''), ')', '') LIKE ?
+      )
+    `);
+    parametrosFiltro.push(termo, termo, termo, termo, `%${digitos || termoBusca}%`);
+  }
+
+  const whereClause = `WHERE 1 = 1 ${filtros.join('\n')}`;
+
+  const [[totalRow]] = await db.execute(
+    `
+    SELECT COUNT(DISTINCT a.id) AS total
+    FROM alunos a
+    LEFT JOIN turmas t ON t.id = a.turma_id
+    LEFT JOIN responsaveis r ON r.aluno_id = a.id
+    ${whereClause}
+    `,
+    parametrosFiltro
+  );
+
+  const [idsRows] = await db.execute(
+    `
+    SELECT DISTINCT a.id, COALESCE(t.nome, '') AS turma_nome, a.nome AS aluno_nome
+    FROM alunos a
+    LEFT JOIN turmas t ON t.id = a.turma_id
+    LEFT JOIN responsaveis r ON r.aluno_id = a.id
+    ${whereClause}
+    ORDER BY turma_nome ASC, aluno_nome ASC, a.id ASC
+    LIMIT ${limite} OFFSET ${offset}
+    `,
+    parametrosFiltro
+  );
+
+  if (!idsRows.length) {
+    return { alunos: [], dados: [], ...montarMetaPaginacao(totalRow.total, paginaAtual, limite) };
+  }
+
+  const ids = idsRows.map((row) => row.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await db.execute(
+    `
+    SELECT
+      a.id, a.nome, a.idade, a.turma_id, t.nome AS turma,
+      r.id AS responsavel_id, r.nome AS responsavel_nome,
+      r.parentesco AS responsavel_parentesco, r.contato AS responsavel_contato
+    FROM alunos a
+    LEFT JOIN turmas t ON t.id = a.turma_id
+    LEFT JOIN responsaveis r ON r.aluno_id = a.id
+    WHERE a.id IN (${placeholders})
+    ORDER BY t.nome IS NULL, t.nome ASC, a.nome ASC, r.nome ASC
+    `,
+    ids
+  );
+
+  const alunos = agruparAlunosComResponsaveis(rows);
+  const meta = montarMetaPaginacao(totalRow.total, paginaAtual, limite);
+  return { alunos, dados: alunos, ...meta };
 }
 
 async function criarAluno(dados) {
@@ -299,6 +394,7 @@ module.exports = {
   atualizarTurma,
   removerTurma,
   listarAlunos,
+  listarAlunosPaginado,
   criarAluno,
   atualizarAluno,
   atualizarTurmaAluno,

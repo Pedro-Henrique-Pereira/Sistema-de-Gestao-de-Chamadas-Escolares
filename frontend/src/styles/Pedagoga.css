@@ -1634,3 +1634,36 @@ button:focus-visible {
     width: 100%;
   }
 }
+
+.atraso-monitor-card {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.atraso-monitor-card .card-header {
+  margin-bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .atraso-monitor-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.responsaveis-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #475569;
+  font-weight: 700;
+}

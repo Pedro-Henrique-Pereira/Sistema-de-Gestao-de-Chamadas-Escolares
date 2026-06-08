@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getUsuarioLogado, logout as logoutService } from "../services/authService";
+import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
 import {
   atualizarChamada,
   criarChamada,
@@ -17,9 +18,7 @@ function dataParaBR(data) {
 }
 
 function hojeLocalISO() {
-  const agora = new Date();
-  const offset = agora.getTimezoneOffset() * 60000;
-  return new Date(agora.getTime() - offset).toISOString().slice(0, 10);
+  return dataBrasiliaISO();
 }
 
 function normalizarChamada(chamada) {

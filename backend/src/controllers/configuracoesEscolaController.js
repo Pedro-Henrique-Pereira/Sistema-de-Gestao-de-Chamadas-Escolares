@@ -1,4 +1,5 @@
 const db = require("../database/db");
+const { dataBrasiliaISO, horarioBrasilia } = require("../utils/brasiliaTime");
 
 function normalizarHorario(valor) {
   const horario = String(valor || "").trim();
@@ -23,20 +24,20 @@ function normalizarMesesJustificativas(valor) {
 
 async function garantirConfiguracao(connection = db) {
   const [rows] = await connection.execute(
-    "SELECT id, horario_limite_atraso, tempo_maximo_justificativas_meses, TIME_FORMAT(CURTIME(), '%H:%i:%s') AS horario_servidor, CURDATE() AS data_servidor FROM configuracoes_escola WHERE id = 1 LIMIT 1"
+    "SELECT id, horario_limite_atraso, tempo_maximo_justificativas_meses FROM configuracoes_escola WHERE id = 1 LIMIT 1"
   );
 
-  if (rows[0]) return rows[0];
+  if (rows[0]) return { ...rows[0], horario_servidor: horarioBrasilia(), data_servidor: dataBrasiliaISO() };
 
   await connection.execute(
     "INSERT INTO configuracoes_escola (id, horario_limite_atraso, tempo_maximo_justificativas_meses) VALUES (1, '07:45:00', 1)"
   );
 
   const [novasRows] = await connection.execute(
-    "SELECT id, horario_limite_atraso, tempo_maximo_justificativas_meses, TIME_FORMAT(CURTIME(), '%H:%i:%s') AS horario_servidor, CURDATE() AS data_servidor FROM configuracoes_escola WHERE id = 1 LIMIT 1"
+    "SELECT id, horario_limite_atraso, tempo_maximo_justificativas_meses FROM configuracoes_escola WHERE id = 1 LIMIT 1"
   );
 
-  return novasRows[0];
+  return { ...novasRows[0], horario_servidor: horarioBrasilia(), data_servidor: dataBrasiliaISO() };
 }
 
 async function obterConfiguracao(req, res, next) {

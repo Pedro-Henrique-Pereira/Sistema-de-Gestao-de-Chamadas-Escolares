@@ -3,12 +3,14 @@ import { ChevronDown, LogOut, Pencil, Search } from "lucide-react";
 import api from "../services/api";
 import { pedagogaService } from "../services/pedagogaService";
 import AutomacaoFeedbackModal from "../components/AutomacaoFeedbackModal";
+import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
 import { buscarConfiguracaoEscola } from "../services/configuracoesEscolaService";
 import RelatoriosAvancados from "./RelatoriosAvancados";
 import "../styles/Admin.css";
 import "../styles/Pedagoga.css";
+import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
 
-const hojeISO = () => new Date().toISOString().slice(0, 10);
+const hojeISO = () => dataBrasiliaISO();
 
 function normalizarStatus(aluno) {
   return String(aluno.status_presenca || aluno.status || "ausente").toLowerCase();
@@ -51,6 +53,7 @@ function pontuarBuscaResponsavel(responsavel, termo) {
 function Pedagoga() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activePage, setActivePage] = useState("dashboard");
+  const [abaPainel, setAbaPainel] = useState("geral");
   const [usuarioLogado, setUsuarioLogado] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [chamadas, setChamadas] = useState([]);
@@ -60,6 +63,8 @@ function Pedagoga() {
   const [responsaveis, setResponsaveis] = useState([]);
   const [buscaResponsaveis, setBuscaResponsaveis] = useState("");
   const [buscaResponsaveisDebounced, setBuscaResponsaveisDebounced] = useState("");
+  const [paginaResponsaveis, setPaginaResponsaveis] = useState(1);
+  const [metaResponsaveis, setMetaResponsaveis] = useState({ totalRegistros: 0, paginaAtual: 1, totalPaginas: 1, limite: 50 });
   const [justificativas, setJustificativas] = useState({});
   const [chamadasAbertas, setChamadasAbertas] = useState({});
   const [justificativasAbertas, setJustificativasAbertas] = useState({});
@@ -70,6 +75,11 @@ function Pedagoga() {
   const [alunosPedagogicos, setAlunosPedagogicos] = useState({});
   const [configForm, setConfigForm] = useState({ nome: "", email: "", senha: "" });
   const [loading, setLoading] = useState(false);
+  const [loadingAbas, setLoadingAbas] = useState({
+    chamadas: false,
+    responsaveis: false,
+    relatorios: false,
+  });
   const [mensagem, setMensagem] = useState("");
   const [configAtraso, setConfigAtraso] = useState({ horarioLimiteAtraso: "07:45", atrasoLiberado: false, horarioServidor: "" });
   const [relatorioTurmas, setRelatorioTurmas] = useState([]);
@@ -84,6 +94,22 @@ function Pedagoga() {
   const justificativasRefs = useRef({});
   const responsaveisRefs = useRef({});
   const primeiraBuscaResponsavelAplicadaRef = useRef(false);
+  const cacheRef = useRef({
+    dashboardCarregado: false,
+    configAtrasoCarregada: false,
+    mensagemWhatsappCarregada: false,
+    preferenciasCarregadas: false,
+    chamadasCarregadas: false,
+    responsaveisCarregados: false,
+    relatoriosCarregados: false,
+    filtrosCarregados: false,
+    paginasResponsaveis: {},
+  });
+  const requisicoesEmAndamentoRef = useRef({
+    chamadas: false,
+    responsaveis: false,
+    relatorios: false,
+  });
   const [responsavelDestacado, setResponsavelDestacado] = useState(null);
 
   const menuItems = [
@@ -109,7 +135,22 @@ function Pedagoga() {
 
   async function carregarDashboard() {
     const { data } = await pedagogaService.dashboard();
-    setDashboard(data);
+    setDashboard((dashboardAtual) => ({
+      ...data,
+      alunosAtrasados: dashboardAtual?.alunosAtrasados || [],
+    }));
+  }
+
+  async function carregarAlunosAtrasadosDashboard() {
+    const { data } = await pedagogaService.dashboard({ incluirAlunosAtrasados: 1 });
+    const lista = Array.isArray(data.alunosAtrasados) ? data.alunosAtrasados : [];
+
+    setDashboard({
+      ...data,
+      alunosAtrasados: lista,
+    });
+
+    return lista;
   }
 
   async function carregarChamadas() {
@@ -123,18 +164,43 @@ function Pedagoga() {
     setTurmasPendentes(turmasData.turmas || []);
   }
 
-  async function carregarResponsaveis(busca = buscaResponsaveis) {
+  function montarChaveCacheResponsaveis(page = paginaResponsaveis, busca = buscaResponsaveisDebounced) {
+    return `responsaveis:${page}:${String(busca || "").trim().toLowerCase()}`;
+  }
+
+  async function carregarResponsaveis(busca = buscaResponsaveisDebounced, page = paginaResponsaveis, opcoes = {}) {
     const termo = String(busca || "").trim();
+    const chaveCache = montarChaveCacheResponsaveis(page, termo);
+    const cacheResponsaveis = cacheRef.current.paginasResponsaveis || {};
+
+    if (!opcoes.forcarAtualizacao && cacheResponsaveis[chaveCache]) {
+      setResponsaveis(cacheResponsaveis[chaveCache].responsaveis || []);
+      setMetaResponsaveis(cacheResponsaveis[chaveCache].meta || { totalRegistros: 0, paginaAtual: page, totalPaginas: 1, limite: 50 });
+      return cacheResponsaveis[chaveCache].responsaveis || [];
+    }
+
     const { data } = await api.get("/api/pedagoga/responsaveis", {
-      params: termo ? { busca: termo } : {},
+      params: { page, limit: 50, busca: termo },
     });
-    const lista = data.responsaveis || [];
+    const lista = data.responsaveis || data.dados || [];
+    const meta = {
+      totalRegistros: Number(data.totalRegistros || lista.length || 0),
+      paginaAtual: Number(data.paginaAtual || page),
+      totalPaginas: Number(data.totalPaginas || 1),
+      limite: Number(data.limite || 50),
+    };
     setResponsaveis(lista);
+    setMetaResponsaveis(meta);
+    cacheRef.current.paginasResponsaveis = {
+      ...(cacheRef.current.paginasResponsaveis || {}),
+      [chaveCache]: { responsaveis: lista, meta },
+    };
     return lista;
   }
 
   function localizarResponsavel(event) {
     event.preventDefault();
+    setPaginaResponsaveis(1);
     setBuscaResponsaveisDebounced(buscaResponsaveis);
     aplicarFocoBuscaResponsaveis(buscaResponsaveis, responsaveis);
   }
@@ -184,10 +250,19 @@ function Pedagoga() {
     setRelatorioAlunos(data.alunos || []);
   }
 
-  async function carregarTudo() {
+  async function carregarDadosIniciais() {
     try {
       setLoading(true);
-      await Promise.all([carregarUsuarioLogado(), carregarDashboard(), carregarChamadas(), carregarResponsaveis(), carregarConfiguracaoAtraso(), carregarDadosRelatoriosPedagogo(), carregarMensagemWhatsapp(), carregarPreferenciasPedagoga()]);
+      await Promise.all([
+        carregarUsuarioLogado(),
+        carregarDashboard(),
+        carregarConfiguracaoAtraso(),
+        carregarPreferenciasPedagoga(),
+      ]);
+
+      cacheRef.current.dashboardCarregado = true;
+      cacheRef.current.configAtrasoCarregada = true;
+      cacheRef.current.preferenciasCarregadas = true;
     } catch (error) {
       window.location.href = "/login";
     } finally {
@@ -195,8 +270,60 @@ function Pedagoga() {
     }
   }
 
+  async function carregarAbaSobDemanda(pagina, opcoes = {}) {
+    const forcarAtualizacao = Boolean(opcoes.forcarAtualizacao);
+    const abasComCache = ["chamadas", "responsaveis", "relatorios"];
+
+    if (!abasComCache.includes(pagina)) return;
+    if (!forcarAtualizacao && requisicoesEmAndamentoRef.current[pagina]) return;
+
+    const cache = cacheRef.current;
+
+    if (!forcarAtualizacao) {
+      if (pagina === "chamadas" && cache.chamadasCarregadas && cache.configAtrasoCarregada && cache.mensagemWhatsappCarregada) return;
+      if (pagina === "responsaveis" && cache.responsaveisCarregados) return;
+      if (pagina === "relatorios" && cache.relatoriosCarregados && cache.filtrosCarregados) return;
+    }
+
+    requisicoesEmAndamentoRef.current[pagina] = true;
+    setLoadingAbas((prev) => ({ ...prev, [pagina]: true }));
+
+    try {
+      if (pagina === "chamadas") {
+        const tarefas = [];
+
+        if (forcarAtualizacao || !cache.configAtrasoCarregada) tarefas.push(carregarConfiguracaoAtraso());
+        if (forcarAtualizacao || !cache.chamadasCarregadas) tarefas.push(carregarChamadas());
+        if (forcarAtualizacao || !cache.mensagemWhatsappCarregada) tarefas.push(carregarMensagemWhatsapp());
+
+        await Promise.all(tarefas);
+
+        cache.configAtrasoCarregada = true;
+        cache.chamadasCarregadas = true;
+        cache.mensagemWhatsappCarregada = true;
+      }
+
+      if (pagina === "responsaveis") {
+        await carregarResponsaveis(buscaResponsaveisDebounced, paginaResponsaveis);
+        cache.responsaveisCarregados = true;
+      }
+
+      if (pagina === "relatorios") {
+        await carregarDadosRelatoriosPedagogo();
+        cache.relatoriosCarregados = true;
+        cache.filtrosCarregados = true;
+      }
+    } catch (error) {
+      console.error(error);
+      setMensagem(error.message || "Erro ao carregar os dados desta aba.");
+    } finally {
+      requisicoesEmAndamentoRef.current[pagina] = false;
+      setLoadingAbas((prev) => ({ ...prev, [pagina]: false }));
+    }
+  }
+
   useEffect(() => {
-    carregarTudo();
+    carregarDadosIniciais();
   }, []);
 
 
@@ -212,32 +339,35 @@ function Pedagoga() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      setPaginaResponsaveis(1);
       setBuscaResponsaveisDebounced(buscaResponsaveis);
-    }, 300);
+    }, 500);
 
     return () => window.clearTimeout(timer);
   }, [buscaResponsaveis]);
+
+  useEffect(() => {
+    if (activePage !== "responsaveis") return;
+
+    setLoadingAbas((prev) => ({ ...prev, responsaveis: true }));
+    carregarResponsaveis(buscaResponsaveisDebounced, paginaResponsaveis)
+      .then(() => {
+        cacheRef.current.responsaveisCarregados = true;
+      })
+      .catch((error) => {
+        setMensagem(error.message || "Erro ao carregar responsáveis.");
+      })
+      .finally(() => {
+        setLoadingAbas((prev) => ({ ...prev, responsaveis: false }));
+      });
+  }, [activePage, buscaResponsaveisDebounced, paginaResponsaveis]);
 
   const buscaResponsaveisAtiva = useMemo(() => {
     const termo = String(buscaResponsaveisDebounced || "").trim();
     return Boolean(normalizarBuscaResponsavel(termo) || apenasDigitos(termo));
   }, [buscaResponsaveisDebounced]);
 
-  const responsaveisFiltrados = useMemo(() => {
-    const termo = String(buscaResponsaveisDebounced || "").trim();
-
-    if (!buscaResponsaveisAtiva) return responsaveis;
-
-    return responsaveis
-      .map((responsavel, indice) => ({
-        responsavel,
-        indice,
-        pontuacao: pontuarBuscaResponsavel(responsavel, termo),
-      }))
-      .filter((item) => item.pontuacao > 0)
-      .sort((a, b) => b.pontuacao - a.pontuacao || a.indice - b.indice)
-      .map((item) => item.responsavel);
-  }, [responsaveis, buscaResponsaveisDebounced, buscaResponsaveisAtiva]);
+  const responsaveisFiltrados = useMemo(() => responsaveis, [responsaveis]);
 
   function aplicarFocoBuscaResponsaveis(termoBusca, listaResponsaveis) {
     const termo = String(termoBusca || "").trim();
@@ -336,11 +466,10 @@ function Pedagoga() {
   }
 
   function trocarPagina(pagina) {
-    if (pagina === "chamadas") carregarConfiguracaoAtraso().catch(console.error);
     setActivePage(pagina);
     setSidebarOpen(false);
     setMensagem("");
-    if (pagina === "responsaveis") carregarResponsaveis("").catch(console.error);
+    carregarAbaSobDemanda(pagina).catch(console.error);
   }
 
   async function logout() {
@@ -444,6 +573,8 @@ function Pedagoga() {
       setJustificativas({});
       setJustificativasAbertas({});
       await Promise.all([carregarDashboard(), carregarChamadas()]);
+      cacheRef.current.dashboardCarregado = true;
+      cacheRef.current.chamadasCarregadas = true;
     } catch (error) {
       setMensagem(error.message);
     } finally {
@@ -490,6 +621,7 @@ function Pedagoga() {
       setMensagemWhatsappTexto(data.texto || mensagemWhatsappTexto);
       setMensagemWhatsappModalAberto(false);
       setMensagem("Mensagem padrão do WhatsApp salva com sucesso.");
+      cacheRef.current.mensagemWhatsappCarregada = true;
     } catch (error) {
       setMensagem(error.message);
     } finally {
@@ -524,6 +656,8 @@ function Pedagoga() {
       const { data } = await pedagogaService.detalharChamadaConfirmada(chamadaConfirmadaEditando.id);
       setChamadaConfirmadaEditando(data.chamada);
       await Promise.all([carregarDashboard(), carregarChamadas()]);
+      cacheRef.current.dashboardCarregado = true;
+      cacheRef.current.chamadasCarregadas = true;
       setMensagem("Frequência atualizada com sucesso.");
     } catch (error) {
       setMensagem(error.message);
@@ -553,6 +687,9 @@ function Pedagoga() {
       await pedagogaService.marcarAlunoAtrasado(chamada.id, alunoId);
       setMensagem("Atraso registrado com sucesso.");
       await Promise.all([carregarDashboard(), carregarChamadas(), carregarConfiguracaoAtraso()]);
+      cacheRef.current.dashboardCarregado = true;
+      cacheRef.current.chamadasCarregadas = true;
+      cacheRef.current.configAtrasoCarregada = true;
     } catch (error) {
       setMensagem(error.message);
     } finally {
@@ -653,6 +790,8 @@ function Pedagoga() {
       setChamadaEditando(null);
       setAlunosPedagogicos({});
       await Promise.all([carregarDashboard(), carregarChamadas()]);
+      cacheRef.current.dashboardCarregado = true;
+      cacheRef.current.chamadasCarregadas = true;
     } catch (error) {
       setMensagem(error.message);
     } finally {
@@ -670,7 +809,9 @@ function Pedagoga() {
       })));
       setResponsavelEditando(null);
       setMensagem("Dados do responsável atualizados com sucesso.");
-      await carregarResponsaveis();
+      cacheRef.current.paginasResponsaveis = {};
+      await carregarResponsaveis(buscaResponsaveisDebounced, paginaResponsaveis, { forcarAtualizacao: true });
+      cacheRef.current.responsaveisCarregados = true;
     } catch (error) {
       setMensagem(error.message);
     } finally {
@@ -688,6 +829,7 @@ function Pedagoga() {
       setUsuarioLogado(data.usuario);
       setConfigForm({ nome: data.usuario.nome, email: data.usuario.email, senha: "" });
       setMensagem("Perfil atualizado com sucesso.");
+      cacheRef.current.preferenciasCarregadas = true;
     } catch (error) {
       setMensagem(error.message);
     } finally {
@@ -740,35 +882,72 @@ function Pedagoga() {
         {activePage === "dashboard" && (
           <section className="page-section">
             <div className="page-title"><h1>Painel Principal</h1><p>Resumo geral das chamadas de presença do dia.</p></div>
-            <div className="cards-grid">
-              <div className="summary-card"><span className="card-icon">CH</span><div><h3>{dashboard?.resumo?.chamadasHoje || 0}</h3><p>Chamadas hoje</p></div></div>
-              <div className="summary-card"><span className="card-icon">FT</span><div><h3>{dashboard?.resumo?.totalFaltas || 0}</h3><p>Faltas do dia</p></div></div>
-              <div className="summary-card"><span className="card-icon">JF</span><div><h3>{dashboard?.resumo?.totalJustificadas || 0}</h3><p>Faltas justificadas</p></div></div>
-              <div className="summary-card delay-card"><span className="card-icon">AT</span><div><h3>{dashboard?.resumo?.totalAtrasos || 0}</h3><p>Atrasos do dia</p><small>Horário máximo: {configAtraso.horarioLimiteAtraso}</small></div></div>
+
+            <div className="dashboard-tab-toggle" role="tablist" aria-label="Alternar visão do painel pedagógico">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={abaPainel === "geral"}
+                className={abaPainel === "geral" ? "active" : ""}
+                onClick={() => setAbaPainel("geral")}
+              >
+                Visão Geral
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={abaPainel === "atrasos"}
+                className={abaPainel === "atrasos" ? "active" : ""}
+                onClick={() => setAbaPainel("atrasos")}
+              >
+                Painel de Atrasos
+              </button>
             </div>
-            <div className="content-card">
-              <div className="card-header"><h2>Turmas do Dia</h2><p>Status das chamadas por sala.</p></div>
-              <div className="class-list">
-                {(dashboard?.turmas || []).map((turma) => (
-                  <div className="class-item class-item-rich" key={turma.id}>
-                    <div><strong>{turma.nome}</strong><span>{turma.total_alunos} alunos cadastrados</span></div>
-                    <div className="attendance-summary">
-                      <span className="summary-present">Presenças: {turma.presentes}</span>
-                      <span className="summary-absent">Faltas: {turma.faltas}</span>
-                      <span className="summary-justified">Justificadas: {turma.justificadas}</span>
-                      <span className="summary-delay">Atrasos: {turma.atrasos || 0}</span>
-                    </div>
-                    <span className={`status ${turma.status_chamada === "finalizada" ? "success" : "warning"}`}>{turma.status_chamada === "finalizada" ? "Finalizada" : "Pendente"}</span>
+
+            {abaPainel === "geral" ? (
+              <>
+                <div className="cards-grid">
+                  <div className="summary-card"><span className="card-icon">CH</span><div><h3>{dashboard?.resumo?.chamadasHoje || 0}</h3><p>Chamadas hoje</p></div></div>
+                  <div className="summary-card"><span className="card-icon">FT</span><div><h3>{dashboard?.resumo?.totalFaltas || 0}</h3><p>Faltas do dia</p></div></div>
+                  <div className="summary-card"><span className="card-icon">JF</span><div><h3>{dashboard?.resumo?.totalJustificadas || 0}</h3><p>Faltas justificadas</p></div></div>
+                  <div className="summary-card delay-card"><span className="card-icon">AT</span><div><h3>{dashboard?.resumo?.totalAtrasos || 0}</h3><p>Atrasos do dia</p><small>Horário máximo: {configAtraso.horarioLimiteAtraso}</small></div></div>
+                </div>
+                <div className="content-card">
+                  <div className="card-header"><h2>Turmas do Dia</h2><p>Status das chamadas por sala.</p></div>
+                  <div className="class-list">
+                    {(dashboard?.turmas || []).map((turma) => (
+                      <div className="class-item class-item-rich" key={turma.id}>
+                        <div><strong>{turma.nome}</strong><span>{turma.total_alunos} alunos cadastrados</span></div>
+                        <div className="attendance-summary">
+                          <span className="summary-present">Presenças: {turma.presentes}</span>
+                          <span className="summary-absent">Faltas: {turma.faltas}</span>
+                          <span className="summary-justified">Justificadas: {turma.justificadas}</span>
+                          <span className="summary-delay">Atrasos: {turma.atrasos || 0}</span>
+                        </div>
+                        <span className={`status ${turma.status_chamada === "finalizada" ? "success" : "warning"}`}>{turma.status_chamada === "finalizada" ? "Finalizada" : "Pendente"}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
+              </>
+            ) : (
+              <AlunosAtrasadosCard
+                alunos={dashboard?.alunosAtrasados || []}
+                carregarAlunosAtrasados={carregarAlunosAtrasadosDashboard}
+                cacheNamespace="pedagoga"
+                horarioLimiteAtraso={configAtraso.horarioLimiteAtraso}
+              />
+            )}
           </section>
         )}
 
         {activePage === "chamadas" && (
           <section className="page-section">
             <div className="page-title"><h1>Chamadas</h1><p>Confirme chamadas temporárias, gere os registros permanentes e edite chamadas salvas hoje.</p></div>
+            {loadingAbas.chamadas && !cacheRef.current.chamadasCarregadas ? (
+              <div className="content-card empty-state">Carregando chamadas...</div>
+            ) : (
+            <>
             <div className="content-card pedagogical-call-card">
               <div className="card-header"><h2>Chamada Pedagógica</h2><p>A matéria será salva automaticamente como “Chamada Pedagógica”.</p></div>
               <div className="filter-grid">
@@ -1016,6 +1195,8 @@ function Pedagoga() {
                 <button className="btn-secondary" type="button" onClick={() => setChamadaConfirmadaEditando(null)}>Encerrar revisão</button>
               </div>
             )}
+            </>
+            )}
 
           </section>
         )}
@@ -1027,6 +1208,10 @@ function Pedagoga() {
               <p>Contatos organizados por turma dos alunos, com busca por responsável, estudante ou telefone.</p>
             </div>
 
+            {loadingAbas.responsaveis && !cacheRef.current.responsaveisCarregados ? (
+              <div className="content-card empty-state">Carregando responsáveis...</div>
+            ) : (
+            <>
             <form className="content-card responsaveis-search-card" onSubmit={localizarResponsavel}>
               <label htmlFor="busca-responsaveis">Busca avançada</label>
               <div className="responsaveis-search-input">
@@ -1113,15 +1298,45 @@ function Pedagoga() {
               ))}
             </div>
 
+            <div className="responsaveis-pagination">
+              <button
+                className="btn-secondary"
+                type="button"
+                disabled={loadingAbas.responsaveis || metaResponsaveis.paginaAtual <= 1}
+                onClick={() => setPaginaResponsaveis((pagina) => Math.max(pagina - 1, 1))}
+              >
+                Anterior
+              </button>
+              <span>
+                Página {metaResponsaveis.paginaAtual} de {metaResponsaveis.totalPaginas} — {metaResponsaveis.totalRegistros} registro(s)
+              </span>
+              <button
+                className="btn-secondary"
+                type="button"
+                disabled={loadingAbas.responsaveis || metaResponsaveis.paginaAtual >= metaResponsaveis.totalPaginas}
+                onClick={() => setPaginaResponsaveis((pagina) => Math.min(pagina + 1, metaResponsaveis.totalPaginas))}
+              >
+                Próxima
+              </button>
+            </div>
+
             {responsavelEditando && <div className="modal-backdrop"><div className="content-card edit-form modal-card"><h2>Atualizar responsável</h2><label>Nome</label><input value={responsavelEditando.nome} onChange={(e) => setResponsavelEditando({ ...responsavelEditando, nome: e.target.value })} /><label>Contato</label><input value={responsavelEditando.contato} onChange={(e) => setResponsavelEditando({ ...responsavelEditando, contato: e.target.value })} /><small>Alunos: {responsavelEditando.alunos.map((a) => `${a.nome}${a.turma ? ` (${a.turma})` : ""}`).join(", ")}</small><div className="action-row"><button className="btn-primary" type="button" onClick={salvarResponsavel} disabled={loading}>Confirmar atualização</button><button className="btn-secondary" type="button" onClick={() => setResponsavelEditando(null)}>Cancelar</button></div></div></div>}
+            </>
+            )}
           </section>
         )}
 
         {activePage === "relatorios" && (
           <section className="page-section pedagoga-reports-page">
             <div className="page-title"><h1>Relatórios do Pedagogo</h1><p>Relatório avançado com os mesmos filtros da área administrativa.</p></div>
-            <div className="cards-grid report-daily-summary"><div className="summary-card"><span className="card-icon">CR</span><div><h3>{resumoRelatorios.chamadas}</h3><p>Chamadas registradas hoje</p></div></div><div className="summary-card"><span className="card-icon">PR</span><div><h3>{resumoRelatorios.presencas}</h3><p>Presenças hoje</p></div></div><div className="summary-card"><span className="card-icon">FT</span><div><h3>{resumoRelatorios.faltas}</h3><p>Faltas hoje</p></div></div><div className="summary-card delay-card"><span className="card-icon">AT</span><div><h3>{dashboard?.resumo?.totalAtrasos || 0}</h3><p>Atrasos hoje</p></div></div></div>
-            <RelatoriosAvancados turmas={relatorioTurmas} alunos={relatorioAlunos} />
+            {loadingAbas.relatorios && !cacheRef.current.relatoriosCarregados ? (
+              <div className="content-card empty-state">Carregando relatórios...</div>
+            ) : (
+              <>
+                <div className="cards-grid report-daily-summary"><div className="summary-card"><span className="card-icon">CR</span><div><h3>{resumoRelatorios.chamadas}</h3><p>Chamadas registradas hoje</p></div></div><div className="summary-card"><span className="card-icon">PR</span><div><h3>{resumoRelatorios.presencas}</h3><p>Presenças hoje</p></div></div><div className="summary-card"><span className="card-icon">FT</span><div><h3>{resumoRelatorios.faltas}</h3><p>Faltas hoje</p></div></div><div className="summary-card delay-card"><span className="card-icon">AT</span><div><h3>{dashboard?.resumo?.totalAtrasos || 0}</h3><p>Atrasos hoje</p></div></div></div>
+                <RelatoriosAvancados turmas={relatorioTurmas} alunos={relatorioAlunos} />
+              </>
+            )}
           </section>
         )}
 

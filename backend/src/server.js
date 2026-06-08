@@ -1,4 +1,5 @@
 require("dotenv").config({ path: "config.env" });
+process.env.TZ = process.env.TZ || "America/Sao_Paulo";
 
 function validarConfiguracoesCriticas() {
   const ambienteProducao = process.env.NODE_ENV === "production";
@@ -41,6 +42,10 @@ const { iniciarRotinaLimpezaDiaria } = require("./services/limpezaDadosService")
 const { iniciarRotinaLimpezaAutomacao } = require("./services/limpezaAutomacaoService");
 
 const app = express();
+
+if (process.env.NODE_ENV === "production") {
+app.set("trust proxy", 1);
+}
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://192.168.0.13:5173";
 

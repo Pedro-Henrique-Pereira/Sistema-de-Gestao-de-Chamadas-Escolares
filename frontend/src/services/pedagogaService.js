@@ -1,7 +1,7 @@
 import api from "./api";
 
 export const pedagogaService = {
-  dashboard: () => api.get("/api/pedagoga/dashboard"),
+  dashboard: (params = {}) => api.get("/api/pedagoga/dashboard", { params }),
   chamadasPendentes: () => api.get("/api/pedagoga/chamadas"),
   chamadasConfirmadas: () => api.get("/api/pedagoga/chamadas-confirmadas"),
   detalharChamadaConfirmada: (id) => api.get(`/api/pedagoga/chamadas-confirmadas/${id}`),

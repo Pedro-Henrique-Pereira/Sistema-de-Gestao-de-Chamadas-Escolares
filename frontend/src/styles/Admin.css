@@ -2058,3 +2058,103 @@ textarea:focus,
   box-shadow: inset 4px 0 0 rgba(37, 99, 235, 0.78), inset 0 1px 0 rgba(59, 130, 246, 0.24), inset 0 -1px 0 rgba(59, 130, 246, 0.24);
   font-weight: 700;
 }
+
+.atraso-monitor-card {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.atraso-monitor-card h3 {
+  margin: 0 0 0.35rem;
+}
+
+.atraso-monitor-card p {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .atraso-monitor-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.dashboard-tab-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 1.25rem;
+  padding: 0.35rem;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.07);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+  overflow-x: auto;
+}
+
+.dashboard-tab-toggle button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0.72rem 1.05rem;
+  white-space: nowrap;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.dashboard-tab-toggle button:hover {
+  background: rgba(255, 255, 255, 0.72);
+  color: #1d4ed8;
+}
+
+.dashboard-tab-toggle button.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.22);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 640px) {
+  .dashboard-tab-toggle {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+    border-radius: 20px;
+  }
+
+  .dashboard-tab-toggle button {
+    width: 100%;
+  }
+}
+
+.admin-loading-state {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+  color: #475569;
+  font-weight: 800;
+  margin: 0 0 1rem;
+  padding: 1rem 1.15rem;
+}
+
+.admin-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #475569;
+  font-weight: 700;
+}

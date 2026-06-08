@@ -1,0 +1,151 @@
+.late-students-page {
+  width: 100%;
+}
+
+.late-students-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  margin: 0 0 1rem;
+}
+
+.late-students-back {
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0.68rem 1rem;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.late-students-back:hover {
+  background: rgba(37, 99, 235, 0.14);
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
+}
+
+.late-students-card {
+  width: 100%;
+  margin: 1.25rem 0;
+  overflow: hidden;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
+}
+
+.late-students-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem 1.25rem;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(59, 130, 246, 0.06));
+  border-bottom: 1px solid rgba(37, 99, 235, 0.12);
+}
+
+.late-students-eyebrow {
+  display: inline-flex;
+  margin-bottom: 0.3rem;
+  color: #2563eb;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.late-students-header h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: clamp(1.1rem, 1.8vw, 1.45rem);
+}
+
+.late-students-header p {
+  margin: 0.25rem 0 0;
+  color: #64748b;
+  font-size: 0.92rem;
+}
+
+.late-students-header strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 18px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #1d4ed8;
+  font-size: 1.45rem;
+}
+
+.late-students-empty {
+  padding: 1.35rem;
+  color: #64748b;
+  text-align: center;
+}
+
+.late-students-error {
+  color: #b91c1c;
+}
+
+.late-students-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.late-students-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.late-students-table th,
+.late-students-table td {
+  padding: 0.95rem 1.1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  text-align: left;
+}
+
+.late-students-table th {
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.late-students-table td {
+  color: #1e293b;
+  font-size: 0.94rem;
+}
+
+.late-students-table tbody tr:hover {
+  background: rgba(37, 99, 235, 0.045);
+}
+
+.late-students-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.38rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .late-students-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .late-students-header strong {
+    min-width: 2.8rem;
+    height: 2.8rem;
+    border-radius: 15px;
+    font-size: 1.2rem;
+  }
+}
