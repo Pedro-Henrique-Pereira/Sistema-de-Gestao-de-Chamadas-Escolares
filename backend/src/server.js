@@ -1,6 +1,10 @@
 require("dotenv").config({ path: "config.env" });
 process.env.TZ = process.env.TZ || "America/Sao_Paulo";
 
+console.log("[BOOT] TZ:", process.env.TZ);
+console.log("[BOOT] Hora atual:", new Date().toString());
+console.log("[BOOT] ISO UTC:", new Date().toISOString());
+
 function validarConfiguracoesCriticas() {
   const ambienteProducao = process.env.NODE_ENV === "production";
 
@@ -44,7 +48,8 @@ const { iniciarRotinaLimpezaAutomacao } = require("./services/limpezaAutomacaoSe
 const app = express();
 
 if (process.env.NODE_ENV === "production") {
-app.set("trust proxy", 1);
+  const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 1);
+  app.set("trust proxy", trustProxyHops);
 }
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://192.168.0.13:5173";
