@@ -12,6 +12,8 @@ import { buscarConfiguracaoEscola } from "../services/configuracoesEscolaService
 import { atualizarConfiguracoesUsuario } from "../services/usuariosService";
 import "../styles/Professor.css";
 
+const MIN_CARACTERES_BUSCA_DISCIPLINA = 2;
+
 function dataParaBR(data) {
   if (!data) return "";
   return String(data).slice(0, 10).split("-").reverse().join("/");
@@ -99,8 +101,11 @@ export default function Professor() {
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      if (!chamadaEditandoId) carregarTurmas(disciplina).catch(console.error);
-    }, 350);
+      const termo = String(disciplina || "").trim();
+      if (!chamadaEditandoId && (termo.length === 0 || termo.length >= MIN_CARACTERES_BUSCA_DISCIPLINA)) {
+        carregarTurmas(termo).catch(console.error);
+      }
+    }, 900);
 
     return () => clearTimeout(timeoutId);
   }, [disciplina, chamadaEditandoId]);

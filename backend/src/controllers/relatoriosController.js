@@ -2,10 +2,34 @@ const ExcelJS = require("exceljs");
 const db = require("../database/connection");
 const { colunaExiste, garantirColunasAtraso } = require("../utils/atrasoUtils");
 const { safeLogError } = require("../utils/errorHandler");
-const { anoBrasilia, dataBrasiliaISO } = require("../utils/brasiliaTime");
+const { dataBrasiliaISO } = require("../utils/brasiliaTime");
 
 const LIMITE_PADRAO = 10;
 const LIMITE_MAXIMO = 100;
+const PERIODOS_RELATORIO = {
+  "1m": 1,
+  "3m": 3,
+  "1a": 12,
+};
+
+function formatarDataSQL(data) {
+  return data.toISOString().slice(0, 10);
+}
+
+function resolverPeriodoRelatorio(valor) {
+  const meses = PERIODOS_RELATORIO[String(valor || "1m")] || PERIODOS_RELATORIO["1m"];
+  const fim = new Date(`${dataBrasiliaISO()}T00:00:00.000Z`);
+  fim.setUTCDate(fim.getUTCDate() + 1);
+
+  const inicio = new Date(fim);
+  inicio.setUTCMonth(inicio.getUTCMonth() - meses);
+
+  return {
+    inicio: formatarDataSQL(inicio),
+    fim: formatarDataSQL(fim),
+    periodo: meses === 12 ? "1a" : `${meses}m`,
+  };
+}
 
 function inteiroPositivo(valor, padrao = LIMITE_PADRAO, maximo = LIMITE_MAXIMO) {
   if (valor === undefined || valor === null || valor === "") return padrao;
@@ -144,9 +168,7 @@ function montarCampoHorarioChegada(colunas) {
 async function geralAno(req, res, next) {
   try {
     await prepararRelatorios();
-    const ano = anoBrasilia();
-    const inicioAno = `${ano}-01-01`;
-    const inicioProximoAno = `${ano + 1}-01-01`;
+    const periodo = resolverPeriodoRelatorio(req.query.periodo);
 
     const [rows] = await db.execute(`
       SELECT
@@ -158,14 +180,19 @@ async function geralAno(req, res, next) {
       FROM registros_frequencia_alunos rfa
       WHERE rfa.data_chamada >= ?
         AND rfa.data_chamada < ?
-    `, [inicioAno, inicioProximoAno]);
+    `, [periodo.inicio, periodo.fim]);
 
-    res.json(rows[0] || {
+    res.json({
+      ...(rows[0] || {
       presentes: 0,
       ausentes: 0,
       justificados: 0,
       atrasos: 0,
       chamadas: 0,
+      }),
+      periodo: periodo.periodo,
+      dataInicial: periodo.inicio,
+      dataFinal: periodo.fim,
     });
   } catch (error) {
     logErroRelatorio("geralAno", error);
@@ -178,9 +205,7 @@ async function resumoAnual(req, res, next) {
     await prepararRelatorios();
 
     const { page, limit, offset } = limiteOffsetSeguro(req.query.page, req.query.limit);
-    const ano = anoBrasilia();
-    const inicioAno = `${ano}-01-01`;
-    const inicioProximoAno = `${ano + 1}-01-01`;
+    const periodo = resolverPeriodoRelatorio(req.query.periodo);
 
     const [[countRows], [itens]] = await Promise.all([
       db.execute(`
@@ -188,7 +213,7 @@ async function resumoAnual(req, res, next) {
         FROM registros_frequencia_alunos rfa
         WHERE rfa.data_chamada >= ?
           AND rfa.data_chamada < ?
-      `, [inicioAno, inicioProximoAno]),
+      `, [periodo.inicio, periodo.fim]),
       db.query(`
         SELECT
           rcc.id,
@@ -206,7 +231,7 @@ async function resumoAnual(req, res, next) {
         GROUP BY rcc.id, rcc.data_chamada, rcc.turma_nome
         ORDER BY rcc.data_chamada DESC, rcc.id DESC
         LIMIT ? OFFSET ?
-      `, [inicioAno, inicioProximoAno, limit, offset]),
+      `, [periodo.inicio, periodo.fim, limit, offset]),
     ]);
 
     const total = Number(countRows[0]?.total || 0);
@@ -216,6 +241,9 @@ async function resumoAnual(req, res, next) {
       total,
       page,
       limit,
+      periodo: periodo.periodo,
+      dataInicial: periodo.inicio,
+      dataFinal: periodo.fim,
       totalPaginas: Math.max(Math.ceil(total / limit), 1),
     });
   } catch (error) {
@@ -228,9 +256,7 @@ async function resumoMensal(req, res, next) {
   try {
     await prepararRelatorios();
 
-    const ano = anoBrasilia();
-    const inicioAno = `${ano}-01-01`;
-    const inicioProximoAno = `${ano + 1}-01-01`;
+    const periodo = resolverPeriodoRelatorio(req.query.periodo);
 
     const [itens] = await db.execute(`
       SELECT
@@ -250,9 +276,14 @@ async function resumoMensal(req, res, next) {
         AND rfa.data_chamada < ?
       GROUP BY rfa.data_chamada, rfa.turma_id, rfa.turma_nome, rfa.materia
       ORDER BY rfa.data_chamada DESC, rfa.turma_nome ASC, rfa.materia ASC
-    `, [inicioAno, inicioProximoAno]);
+    `, [periodo.inicio, periodo.fim]);
 
-    res.json({ itens });
+    res.json({
+      itens,
+      periodo: periodo.periodo,
+      dataInicial: periodo.inicio,
+      dataFinal: periodo.fim,
+    });
   } catch (error) {
     logErroRelatorio("resumoMensal", error);
     next(error);

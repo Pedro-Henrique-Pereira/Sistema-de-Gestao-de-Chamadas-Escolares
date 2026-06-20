@@ -1,10 +1,6 @@
 require("dotenv").config({ path: "config.env" });
 process.env.TZ = process.env.TZ || "America/Sao_Paulo";
 
-console.log("[BOOT] TZ:", process.env.TZ);
-console.log("[BOOT] Hora atual:", new Date().toString());
-console.log("[BOOT] ISO UTC:", new Date().toISOString());
-
 function validarConfiguracoesCriticas() {
   const ambienteProducao = process.env.NODE_ENV === "production";
 
@@ -70,6 +66,8 @@ const origensPermitidas = new Set([
   "http://localhost:4173",
   "http://127.0.0.1:5173",
   "http://127.0.0.1:4173",
+  "http://192.168.0.22:5173",
+  "http://192.168.0.22:4173",
   ...FRONTEND_URLS_EXTRAS,
 ]);
 
@@ -130,9 +128,6 @@ const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.BIND_HOST || "0.0.0.0";
 
 app.listen(PORT, HOST, () => {
-  console.log(`Servidor rodando em http://${HOST}:${PORT}`);
-  console.log(`Acesso pela rede local: http://192.168.0.13:${PORT}`);
-
   if (process.env.DISABLE_DAILY_CLEANUP !== "true") {
     iniciarRotinaLimpezaDiaria();
   }

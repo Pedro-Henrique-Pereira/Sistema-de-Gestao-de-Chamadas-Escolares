@@ -7,6 +7,8 @@ import MensagensAdmin from "./MensagensAdmin";
 import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
 import "../styles/Admin.css";
 
+const MIN_CARACTERES_BUSCA_ALUNOS = 2;
+
 export default function Administrador() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [telaAtiva, setTelaAtiva] = useState("painel");
@@ -369,9 +371,10 @@ const alunosSemTurma = useMemo(
 
 useEffect(() => {
   const timer = window.setTimeout(() => {
+    const termo = String(pesquisaAluno || "").trim();
     setPaginaAlunos(1);
-    setPesquisaAlunoDebounced(pesquisaAluno);
-  }, 500);
+    setPesquisaAlunoDebounced(termo.length >= MIN_CARACTERES_BUSCA_ALUNOS ? pesquisaAluno : "");
+  }, 900);
 
   return () => window.clearTimeout(timer);
 }, [pesquisaAluno]);
@@ -675,7 +678,7 @@ async function handleCriarContaEquipe(event) {
       body: JSON.stringify(novaConta),
     });
 
-    setEquipe(data.equipe || []);
+    if (data.pessoa) setEquipe((prev) => [...prev, data.pessoa]);
     setModalEquipe(null);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao criar conta.");
@@ -702,7 +705,11 @@ async function handleEditarEquipe(event) {
       body: JSON.stringify(pessoaEditada),
     });
 
-    setEquipe(data.equipe || []);
+    if (data.pessoa) {
+      setEquipe((prev) => prev.map((pessoa) => (
+        Number(pessoa.id) === Number(data.pessoa.id) ? data.pessoa : pessoa
+      )));
+    }
     setModalEquipe(null);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao editar conta.");
@@ -717,7 +724,8 @@ async function handleRemoverEquipe(idPessoa) {
       method: "DELETE",
     });
 
-    setEquipe(data.equipe || []);
+    const idRemovido = Number(data.id || idPessoa);
+    setEquipe((prev) => prev.filter((pessoa) => Number(pessoa.id) !== idRemovido));
     setConfirmacao(null);
   } catch (error) {
     setErroRegistros(error.message || "Erro ao remover conta.");

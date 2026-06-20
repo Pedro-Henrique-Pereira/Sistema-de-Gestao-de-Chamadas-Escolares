@@ -117,7 +117,7 @@ O sistema tem como objetivo:
 
 ### Dashboard Global
 
-* Indicadores em tempo real.
+* Indicadores.
 * Métricas diárias.
 * Métricas semanais.
 * Métricas mensais.
@@ -201,7 +201,6 @@ Tempo de Atraso = Hora de Chegada - Hora da Chamada
 
 ### Execução em Segundo Plano
 
-* Chrome minimizado.
 * Operação silenciosa.
 * Não interfere no uso do computador.
 
@@ -327,75 +326,6 @@ Responsável por:
 
 ---
 
-# 📂 Estrutura de Pastas
-
-```text
-Sistema-Chamadas/
-│
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── hooks/
-│   │   ├── services/
-│   │   ├── contexts/
-│   │   ├── layouts/
-│   │   └── routes/
-│   │
-│   ├── public/
-│   └── package.json
-│
-├── backend/
-│   ├── src/
-│   │   ├── controllers/
-│   │   ├── middlewares/
-│   │   ├── routes/
-│   │   ├── services/
-│   │   ├── database/
-│   │   ├── utils/
-│   │   └── config/
-│   │
-│   ├── logs/
-│   └── package.json
-│
-├── desktop-bot/
-│   ├── bot/
-│   ├── gui/
-│   ├── database/
-│   ├── services/
-│   ├── logs/
-│   ├── config/
-│   ├── main.py
-│   └── requirements.txt
-│
-├── docs/
-├── README.md
-└── LICENSE
-```
-
----
-
-# 🌐 Principais Rotas da API
-
-| Método | Rota                                           | Descrição                             |
-| ------ | ---------------------------------------------- | ------------------------------------- |
-| POST   | `/api/auth/login`                              | Login do usuário                      |
-| POST   | `/api/auth/logout`                             | Logout                                |
-| GET    | `/api/auth/me`                                 | Usuário autenticado                   |
-| GET    | `/api/admin/painel`                            | Métricas leves do dashboard           |
-| GET    | `/api/registros`                               | Carregamento sob demanda de registros |
-| GET    | `/api/registros/alunos?page=1&limit=50&busca=` | Paginação real via LIMIT/OFFSET       |
-| GET    | `/api/pedagoga/responsaveis`                   | Busca paginada de responsáveis        |
-| GET    | `/api/turmas`                                  | Listagem de turmas                    |
-| GET    | `/api/alunos`                                  | Listagem de alunos                    |
-| POST   | `/api/chamadas`                                | Registro de chamada                   |
-| POST   | `/api/chamadas/confirmar`                      | Confirmação pedagógica                |
-| GET    | `/api/relatorios`                              | Relatórios históricos                 |
-| POST   | `/api/automacao/executar`                      | Solicitação de automação              |
-| GET    | `/api/automacao/status`                        | Status da fila                        |
-| GET    | `/api/configuracoes`                           | Configurações da escola               |
-
----
 
 # 🛠️ Dependências e Tecnologias
 
@@ -440,16 +370,6 @@ Sistema-Chamadas/
 ---
 
 # ⚙️ Instalação e Execução
-
-## Clonar Projeto
-
-```bash
-git clone https://github.com/seu-repositorio.git
-
-cd Sistema-Chamadas
-```
-
----
 
 ## Frontend
 

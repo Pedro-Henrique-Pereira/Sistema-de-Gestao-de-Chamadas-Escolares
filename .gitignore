@@ -17,6 +17,18 @@ build/
 config.env
 backend/config.env
 frontend/.env
+AGENTS.md
+banco_dados.md
+.agents
+.codex
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+*.local
+*.local.*
 
 # logs
 *.log
@@ -41,3 +53,10 @@ backups/
 Thumbs.db
 .vscode/
 .idea/
+
+# python / automacao local
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/

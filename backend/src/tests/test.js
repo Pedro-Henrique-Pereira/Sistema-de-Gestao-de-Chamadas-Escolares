@@ -24,7 +24,7 @@ async function criarUsuarioTeste() {
 
     console.log("Usuário criado com sucesso!");
     console.log("Email: administrador@gmail.com");
-    console.log("Senha: 123456");
+    console.log("Senha: 12138915");
 
     process.exit();
   } catch (error) {

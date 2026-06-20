@@ -3,12 +3,65 @@ import { apiDownload, apiFetch } from "../services/api";
 import { dataBrasiliaISO } from "../utils/brasiliaTime";
 
 const filtrosIniciais = {
-  data: "",
+  data: dataBrasiliaISO(),
   dataInicial: "",
   dataFinal: "",
   turmaId: "",
   alunoId: "",
 };
+
+const RELATORIOS_CACHE_PREFIX = "relatorios_agregados";
+const RELATORIOS_ULTIMO_PERIODO_KEY = `${RELATORIOS_CACHE_PREFIX}:ultimo_periodo`;
+const PERIODOS_GRAFICO = [
+  { valor: "1m", label: "1 mês" },
+  { valor: "3m", label: "3 meses" },
+  { valor: "1a", label: "1 ano" },
+];
+
+function criarMetricasVazias() {
+  return {
+    presentes: 0,
+    ausentes: 0,
+    justificados: 0,
+    atrasos: 0,
+  };
+}
+
+function chaveCacheRelatorios(periodo) {
+  return `${RELATORIOS_CACHE_PREFIX}:${periodo}:${dataBrasiliaISO()}`;
+}
+
+function lerCacheRelatorios(periodo) {
+  try {
+    const cache = JSON.parse(sessionStorage.getItem(chaveCacheRelatorios(periodo)) || "null");
+    if (!cache || !cache.metricas || !Array.isArray(cache.resumo)) return null;
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function salvarCacheRelatorios(periodo, metricas, resumo) {
+  try {
+    sessionStorage.setItem(RELATORIOS_ULTIMO_PERIODO_KEY, periodo);
+    sessionStorage.setItem(
+      chaveCacheRelatorios(periodo),
+      JSON.stringify({
+        geradoEm: new Date().toISOString(),
+        periodo,
+        metricas,
+        resumo,
+      })
+    );
+  } catch {
+    // Cache local é otimização; falha de armazenamento não deve bloquear relatórios.
+  }
+}
+
+function lerUltimoPeriodoRelatorio() {
+  const periodo = sessionStorage.getItem(RELATORIOS_ULTIMO_PERIODO_KEY);
+  return PERIODOS_GRAFICO.some((item) => item.valor === periodo) ? periodo : "1m";
+}
 
 function normalizarDataMySQL(data) {
   if (!data) return "";
@@ -59,12 +112,9 @@ function numero(valor) {
 export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
   const [aba, setAba] = useState("resumo");
   const [filtros, setFiltros] = useState(filtrosIniciais);
-  const [metricas, setMetricas] = useState({
-    presentes: 0,
-    ausentes: 0,
-    justificados: 0,
-    atrasos: 0,
-  });
+  const [periodoGrafico, setPeriodoGrafico] = useState(lerUltimoPeriodoRelatorio);
+  const [periodoGerado, setPeriodoGerado] = useState("");
+  const [metricas, setMetricas] = useState(criarMetricasVazias);
 
   const [resumo, setResumo] = useState([]);
   const [mesesAbertos, setMesesAbertos] = useState({});
@@ -73,6 +123,7 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
   const [justificativas, setJustificativas] = useState([]);
   const [paginaJustificativas, setPaginaJustificativas] = useState(1);
   const [totalPaginasJustificativas, setTotalPaginasJustificativas] = useState(1);
+  const [justificativasCarregadas, setJustificativasCarregadas] = useState(false);
 
   const [carregando, setCarregando] = useState(false);
   const [mensagem, setMensagem] = useState("");
@@ -168,6 +219,7 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
   };
 
   const maiorMetrica = Math.max(metricas.presentes, metricas.ausentes, metricas.justificados, metricas.atrasos, 1);
+  const periodoGeradoLabel = PERIODOS_GRAFICO.find((periodo) => periodo.valor === periodoGerado)?.label || "";
 
   function limparFiltros() {
     setFiltros(filtrosIniciais);
@@ -203,19 +255,27 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
     setPaginaJustificativas(1);
   }
 
-  async function carregarMetricasAno() {
-    const data = await apiFetch("/api/relatorios/geral-ano");
-    setMetricas({
+  async function carregarMetricasPeriodo(periodo) {
+    const data = await apiFetch("/api/relatorios/geral-ano", {
+      params: { periodo },
+    });
+    const proximasMetricas = {
       presentes: numero(data.presentes),
       ausentes: numero(data.ausentes),
       justificados: numero(data.justificados),
       atrasos: numero(data.atrasos),
-    });
+    };
+    setMetricas(proximasMetricas);
+    return proximasMetricas;
   }
 
-  async function carregarResumoMensal() {
-    const data = await apiFetch("/api/relatorios/resumo-mensal");
-    setResumo(data.itens || []);
+  async function carregarResumoPeriodo(periodo) {
+    const data = await apiFetch("/api/relatorios/resumo-mensal", {
+      params: { periodo },
+    });
+    const proximoResumo = data.itens || [];
+    setResumo(proximoResumo);
+    return proximoResumo;
   }
 
   function alternarMes(chaveMes) {
@@ -241,18 +301,32 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
     const data = await apiFetch(`/api/relatorios/justificativas?${params}`);
     setJustificativas(data.itens || []);
     setTotalPaginasJustificativas(numero(data.totalPaginas) || 1);
+    setJustificativasCarregadas(true);
   }
 
-  async function carregarDadosIniciais() {
+  function aplicarCacheRelatorios(cache) {
+    setMetricas(cache.metricas);
+    setResumo(cache.resumo);
+    setPeriodoGerado(cache.periodo || periodoGrafico);
+  }
+
+  async function gerarGrafico() {
     setCarregando(true);
     setMensagem("");
 
     try {
-      await Promise.all([
-        carregarMetricasAno(),
-        carregarResumoMensal(),
-        carregarJustificativas(1),
+      const cache = lerCacheRelatorios(periodoGrafico);
+      if (cache) {
+        aplicarCacheRelatorios(cache);
+        return;
+      }
+
+      const [metricasPeriodo, resumoPeriodo] = await Promise.all([
+        carregarMetricasPeriodo(periodoGrafico),
+        carregarResumoPeriodo(periodoGrafico),
       ]);
+      salvarCacheRelatorios(periodoGrafico, metricasPeriodo, resumoPeriodo);
+      setPeriodoGerado(periodoGrafico);
     } catch (error) {
       console.error("Erro ao carregar relatórios avançados:", error);
       setMensagem("Não foi possível carregar o relatório no momento.");
@@ -262,8 +336,18 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
   }
 
   useEffect(() => {
-    carregarDadosIniciais();
+    const cache = lerCacheRelatorios(periodoGrafico);
+    if (cache) aplicarCacheRelatorios(cache);
   }, []);
+
+  useEffect(() => {
+    if (aba !== "justificativas" || justificativasCarregadas) return;
+
+    carregarJustificativas(1).catch((error) => {
+      console.error("Erro ao carregar justificativas:", error);
+      setMensagem("NÃ£o foi possÃ­vel carregar o histÃ³rico de justificativas.");
+    });
+  }, [aba, justificativasCarregadas]);
 
   async function exportarExcel() {
     setCarregando(true);
@@ -375,6 +459,34 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
             </div>
           </div>
 
+          <div className="filter-panel">
+            <label>
+              Periodo dos graficos
+              <select value={periodoGrafico} onChange={(event) => setPeriodoGrafico(event.target.value)}>
+                {PERIODOS_GRAFICO.map((periodo) => (
+                  <option key={periodo.valor} value={periodo.valor}>
+                    {periodo.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="admin-report-actions">
+              <button className="admin-primary-btn" type="button" onClick={gerarGrafico} disabled={carregando}>
+                {carregando ? "Processando..." : "Gerar Grafico"}
+              </button>
+            </div>
+          </div>
+
+          {!periodoGerado && (
+            <div className="admin-chart-box">
+              <h3>Graficos e metricas</h3>
+              <p>Selecione um periodo e clique em Gerar Grafico para carregar os dados.</p>
+            </div>
+          )}
+
+          {periodoGerado && (
+          <>
           <div className="admin-cards-grid">
             <article className="admin-card">
               <span>Presenças totais no ano</span>
@@ -501,6 +613,8 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
               )}
             </div>
           </article>
+          </>
+          )}
         </>
       )}
 

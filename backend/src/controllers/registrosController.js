@@ -12,6 +12,18 @@ function validarTexto(valor, campo) {
   return String(valor).trim();
 }
 
+function montarPessoaEquipe(id, { nome, email, cargo, status = 'Ativo' }) {
+  return {
+    id: Number(id),
+    nome,
+    idade: '',
+    cargo,
+    email,
+    senha: '',
+    status,
+  };
+}
+
 async function listarDados(req, res, next) {
   try {
     const [turmas, alunos, equipe] = await Promise.all([
@@ -115,7 +127,7 @@ async function criarAluno(req, res, next) {
     };
 
     await Registros.criarAluno(dadosAluno);
-    res.status(201).json({ alunos: await Registros.listarAlunos() });
+    res.status(201).json({ mensagem: 'Aluno criado com sucesso.' });
   } catch (error) {
     next(error);
   }
@@ -149,7 +161,7 @@ async function atualizarAluno(req, res, next) {
     };
 
     await Registros.atualizarAluno(req.params.id, dadosAluno);
-    res.json({ alunos: await Registros.listarAlunos() });
+    res.json({ mensagem: 'Aluno atualizado com sucesso.' });
   } catch (error) {
     next(error);
   }
@@ -159,7 +171,7 @@ async function atualizarTurmaAluno(req, res, next) {
   try {
     const turma = req.body.turma ? formatarTurma(req.body.turma) : '';
     await Registros.atualizarTurmaAluno(req.params.id, turma);
-    res.json({ alunos: await Registros.listarAlunos() });
+    res.json({ mensagem: 'Turma do aluno atualizada com sucesso.' });
   } catch (error) {
     next(error);
   }
@@ -168,7 +180,7 @@ async function atualizarTurmaAluno(req, res, next) {
 async function removerAluno(req, res, next) {
   try {
     await Registros.removerAluno(req.params.id);
-    res.json({ alunos: await Registros.listarAlunos() });
+    res.json({ mensagem: 'Aluno removido com sucesso.' });
   } catch (error) {
     next(error);
   }
@@ -189,8 +201,11 @@ async function criarEquipe(req, res, next) {
     const senha = validarTexto(req.body.senha, 'Senha');
     const cargo = validarTexto(req.body.cargo, 'Cargo');
     const senhaHash = await bcrypt.hash(senha, 10);
-    await Registros.criarEquipe({ nome, email, senhaHash, cargo });
-    res.status(201).json({ equipe: await Registros.listarEquipe() });
+    const id = await Registros.criarEquipe({ nome, email, senhaHash, cargo });
+    res.status(201).json({
+      mensagem: 'Conta criada com sucesso.',
+      pessoa: montarPessoaEquipe(id, { nome, email, cargo }),
+    });
   } catch (error) {
     next(error);
   }
@@ -210,7 +225,15 @@ async function atualizarEquipe(req, res, next) {
       cargo,
       status: req.body.status,
     });
-    res.json({ equipe: await Registros.listarEquipe() });
+    res.json({
+      mensagem: 'Conta atualizada com sucesso.',
+      pessoa: montarPessoaEquipe(req.params.id, {
+        nome,
+        email,
+        cargo,
+        status: req.body.status || 'Ativo',
+      }),
+    });
   } catch (error) {
     next(error);
   }
@@ -222,7 +245,7 @@ async function removerEquipe(req, res, next) {
       return res.status(400).json({ erro: 'Você não pode remover sua própria conta logada.' });
     }
     await Registros.removerEquipe(req.params.id);
-    res.json({ equipe: await Registros.listarEquipe() });
+    res.json({ mensagem: 'Conta removida com sucesso.', id: Number(req.params.id) });
   } catch (error) {
     next(error);
   }

@@ -11,6 +11,7 @@ import "../styles/Pedagoga.css";
 import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
 
 const hojeISO = () => dataBrasiliaISO();
+const MIN_CARACTERES_BUSCA_RESPONSAVEIS = 2;
 
 function normalizarStatus(aluno) {
   return String(aluno.status_presenca || aluno.status || "ausente").toLowerCase();
@@ -339,9 +340,10 @@ function Pedagoga() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      const termo = String(buscaResponsaveis || "").trim();
       setPaginaResponsaveis(1);
-      setBuscaResponsaveisDebounced(buscaResponsaveis);
-    }, 500);
+      setBuscaResponsaveisDebounced(termo.length >= MIN_CARACTERES_BUSCA_RESPONSAVEIS ? buscaResponsaveis : "");
+    }, 1500);
 
     return () => window.clearTimeout(timer);
   }, [buscaResponsaveis]);

@@ -27,12 +27,19 @@ async function executarLimpezaAutomatica() {
       [mesesRetencao]
     );
 
-    const [resultadoChamadas] = await connection.execute("DELETE FROM chamadas_diarias");
+    const [resultadoControleEnvios] = await connection.execute(
+      "DELETE FROM controle_envios_diarios WHERE data_envio < CURDATE()"
+    );
+
+    const [resultadoChamadas] = await connection.execute(
+      "DELETE FROM chamadas_diarias WHERE data_chamada < CURDATE()"
+    );
 
     await connection.commit();
 
     const resumo = {
       chamadasDiariasRemovidas: resultadoChamadas.affectedRows || 0,
+      controleEnviosRemovidos: resultadoControleEnvios.affectedRows || 0,
       justificativasRemovidas: resultadoJustificativas.affectedRows || 0,
       mesesRetencaoJustificativas: mesesRetencao,
       executadoEm: new Date().toISOString(),
@@ -56,6 +63,8 @@ function calcularMsAteProximaMeiaNoite() {
 }
 
 function iniciarRotinaLimpezaDiaria() {
+  executarLimpezaAutomatica().catch(() => {});
+
   const agendarProximaExecucao = () => {
     setTimeout(async () => {
       try {
