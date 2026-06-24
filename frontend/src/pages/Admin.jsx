@@ -1533,7 +1533,7 @@ async function handleRemoverEquipe(idPessoa) {
         )}
 
         {telaAtiva === "relatorios" && (
-          <RelatoriosAvancados turmas={turmas} alunos={alunos} />
+          <RelatoriosAvancados />
         )}
 
         {telaAtiva === "mensagens" && (

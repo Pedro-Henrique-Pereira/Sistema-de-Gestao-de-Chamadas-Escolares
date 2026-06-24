@@ -9,6 +9,8 @@ router.use(autenticar);
 router.use(validarDatasRequest());
 router.use(autorizar("administracao", "pedagoga"));
 
+router.get("/filtros/turmas", relatoriosController.listarTurmasFiltro);
+router.get("/filtros/alunos", relatoriosController.buscarAlunosFiltro);
 router.get("/geral-ano", relatoriosController.geralAno);
 router.get("/resumo-anual", relatoriosController.resumoAnual);
 router.get("/resumo-mensal", relatoriosController.resumoMensal);

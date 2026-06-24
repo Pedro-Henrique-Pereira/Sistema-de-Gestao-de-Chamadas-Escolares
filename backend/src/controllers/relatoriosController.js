@@ -6,10 +6,12 @@ const { dataBrasiliaISO } = require("../utils/brasiliaTime");
 
 const LIMITE_PADRAO = 10;
 const LIMITE_MAXIMO = 100;
+const LIMITE_BUSCA_ALUNOS = 20;
+const MESES_MAXIMOS_EXPORTACAO = 3;
+const MENSAGEM_PERIODO_MAXIMO = "O período máximo permitido para consulta é de 3 meses.";
 const PERIODOS_RELATORIO = {
   "1m": 1,
   "3m": 3,
-  "1a": 12,
 };
 
 function formatarDataSQL(data) {
@@ -27,7 +29,7 @@ function resolverPeriodoRelatorio(valor) {
   return {
     inicio: formatarDataSQL(inicio),
     fim: formatarDataSQL(fim),
-    periodo: meses === 12 ? "1a" : `${meses}m`,
+    periodo: `${meses}m`,
   };
 }
 
@@ -62,6 +64,67 @@ function valorValido(valor) {
 function idSeguro(valor) {
   const numero = Number(valor);
   return Number.isInteger(numero) && numero > 0 ? numero : null;
+}
+
+function dataUTC(dataISO) {
+  const [ano, mes, dia] = String(dataISO).split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1, dia));
+}
+
+function adicionarMeses(data, meses) {
+  const ano = data.getUTCFullYear();
+  const mes = data.getUTCMonth();
+  const dia = data.getUTCDate();
+  const mesAlvoAbsoluto = mes + meses;
+  const anoAlvo = ano + Math.floor(mesAlvoAbsoluto / 12);
+  const mesAlvo = ((mesAlvoAbsoluto % 12) + 12) % 12;
+  const ultimoDiaMesAlvo = new Date(Date.UTC(anoAlvo, mesAlvo + 1, 0)).getUTCDate();
+
+  return new Date(Date.UTC(anoAlvo, mesAlvo, Math.min(dia, ultimoDiaMesAlvo)));
+}
+
+function erroValidacao(mensagem) {
+  const erro = new Error(mensagem);
+  erro.status = 400;
+  return erro;
+}
+
+function validarPeriodoExportacao(filtros = {}) {
+  if (valorValido(filtros.data)) return;
+
+  if (!valorValido(filtros.dataInicial) && !valorValido(filtros.dataFinal)) {
+    throw erroValidacao("Informe uma data ou um intervalo de até 3 meses.");
+  }
+
+  if (!valorValido(filtros.dataInicial) || !valorValido(filtros.dataFinal)) {
+    throw erroValidacao("Informe data inicial e data final para consultar por período.");
+  }
+
+  if (String(filtros.dataInicial) > String(filtros.dataFinal)) {
+    throw erroValidacao("Data inicial nao pode ser posterior a data final.");
+  }
+
+  const inicio = dataUTC(filtros.dataInicial);
+  const fim = dataUTC(filtros.dataFinal);
+  const limite = adicionarMeses(inicio, MESES_MAXIMOS_EXPORTACAO);
+
+  if (fim > limite) {
+    throw erroValidacao(MENSAGEM_PERIODO_MAXIMO);
+  }
+}
+
+function validarDependenciaAlunoTurma(filtros = {}) {
+  if (idSeguro(filtros.alunoId) && !idSeguro(filtros.turmaId)) {
+    throw erroValidacao("Selecione uma turma antes de filtrar por aluno.");
+  }
+}
+
+function textoBuscaSeguro(valor, limite = 80) {
+  return String(valor || "").trim().slice(0, limite);
+}
+
+function escaparLike(valor) {
+  return String(valor).replace(/[!%_]/g, (caractere) => `!${caractere}`);
 }
 
 function montarWhereFiltros(filtros = {}) {
@@ -122,6 +185,7 @@ function logErroRelatorio(contexto, error) {
 }
 
 let cacheColunasFrequencia = null;
+let relatoriosPreparados = false;
 
 async function obterColunasFrequencia() {
   if (cacheColunasFrequencia) return cacheColunasFrequencia;
@@ -143,6 +207,8 @@ async function obterColunasFrequencia() {
 }
 
 async function prepararRelatorios() {
+  if (relatoriosPreparados) return;
+
   // Os painéis de relatório NÃO podem cair por causa de colunas opcionais usadas apenas
   // na exportação detalhada. A estrutura principal exigida é a tabela detalhada.
   const temTabelaDetalhada = await colunaExiste(db, "registros_frequencia_alunos", "id");
@@ -151,6 +217,70 @@ async function prepararRelatorios() {
     const erro = new Error("Banco desatualizado: tabela registros_frequencia_alunos não encontrada.");
     erro.status = 500;
     throw erro;
+  }
+
+  relatoriosPreparados = true;
+}
+
+async function listarTurmasFiltro(req, res, next) {
+  try {
+    const [turmas] = await db.execute(`
+      SELECT id, nome
+      FROM turmas
+      ORDER BY nome ASC
+    `);
+
+    res.json({ turmas });
+  } catch (error) {
+    logErroRelatorio("listarTurmasFiltro", error);
+    next(error);
+  }
+}
+
+async function buscarAlunosFiltro(req, res, next) {
+  try {
+    const termo = textoBuscaSeguro(req.query.busca);
+    const turmaId = idSeguro(req.query.turmaId || req.query.turma_id);
+
+    if (!turmaId) {
+      return res.status(400).json({ erro: "Selecione uma turma para pesquisar alunos." });
+    }
+
+    if (termo.length < 2) {
+      return res.json({ alunos: [] });
+    }
+
+    const termoLike = escaparLike(termo);
+    const where = ["a.turma_id = ?", "a.nome LIKE ? ESCAPE '!'"];
+    const params = [turmaId, `%${termoLike}%`];
+
+    params.push(termo, `${termoLike}%`, LIMITE_BUSCA_ALUNOS);
+
+    const [alunos] = await db.query(`
+      SELECT
+        a.id,
+        a.nome,
+        a.turma_id,
+        t.nome AS turma,
+        t.nome AS turma_nome
+      FROM alunos a
+      LEFT JOIN turmas t ON t.id = a.turma_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY
+        CASE
+          WHEN a.nome = ? THEN 0
+          WHEN a.nome LIKE ? ESCAPE '!' THEN 1
+          ELSE 2
+        END,
+        a.nome ASC,
+        a.id ASC
+      LIMIT ?
+    `, params);
+
+    res.json({ alunos });
+  } catch (error) {
+    logErroRelatorio("buscarAlunosFiltro", error);
+    next(error);
   }
 }
 
@@ -387,6 +517,8 @@ function formatarTempoAtraso(segundos = 0) {
 async function exportar(req, res, next) {
   try {
     await prepararRelatorios();
+    validarPeriodoExportacao(req.body);
+    validarDependenciaAlunoTurma(req.body);
 
     // Corrige ReferenceError: campoHorarioChegada is not defined.
     // O campo pode ou não existir dependendo das migrações aplicadas, então ele
@@ -479,6 +611,8 @@ async function exportar(req, res, next) {
 }
 
 module.exports = {
+  listarTurmasFiltro,
+  buscarAlunosFiltro,
   geralAno,
   resumoAnual,
   resumoMensal,

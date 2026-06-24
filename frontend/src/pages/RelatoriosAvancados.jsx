@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Search, X } from "lucide-react";
 import { apiDownload, apiFetch } from "../services/api";
 import { dataBrasiliaISO } from "../utils/brasiliaTime";
 
@@ -12,10 +13,11 @@ const filtrosIniciais = {
 
 const RELATORIOS_CACHE_PREFIX = "relatorios_agregados";
 const RELATORIOS_ULTIMO_PERIODO_KEY = `${RELATORIOS_CACHE_PREFIX}:ultimo_periodo`;
+const MESES_MAXIMOS_EXPORTACAO = 3;
+const MENSAGEM_PERIODO_MAXIMO = "O período máximo permitido para consulta é de 3 meses.";
 const PERIODOS_GRAFICO = [
   { valor: "1m", label: "1 mês" },
   { valor: "3m", label: "3 meses" },
-  { valor: "1a", label: "1 ano" },
 ];
 
 function criarMetricasVazias() {
@@ -108,13 +110,59 @@ function numero(valor) {
   return Number(valor || 0);
 }
 
+function dataUTC(dataISO) {
+  const [ano, mes, dia] = String(dataISO).split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1, dia));
+}
 
-export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
+function adicionarMeses(data, meses) {
+  const ano = data.getUTCFullYear();
+  const mes = data.getUTCMonth();
+  const dia = data.getUTCDate();
+  const mesAlvoAbsoluto = mes + meses;
+  const anoAlvo = ano + Math.floor(mesAlvoAbsoluto / 12);
+  const mesAlvo = ((mesAlvoAbsoluto % 12) + 12) % 12;
+  const ultimoDiaMesAlvo = new Date(Date.UTC(anoAlvo, mesAlvo + 1, 0)).getUTCDate();
+
+  return new Date(Date.UTC(anoAlvo, mesAlvo, Math.min(dia, ultimoDiaMesAlvo)));
+}
+
+function validarPeriodoExportacao(filtros) {
+  if (filtros.data) return "";
+
+  if (!filtros.dataInicial && !filtros.dataFinal) {
+    return "Informe uma data ou um intervalo de até 3 meses.";
+  }
+
+  if (!filtros.dataInicial || !filtros.dataFinal) {
+    return "Informe data inicial e data final para consultar por período.";
+  }
+
+  if (filtros.dataInicial > filtros.dataFinal) {
+    return "Data inicial nao pode ser posterior a data final.";
+  }
+
+  const inicio = dataUTC(filtros.dataInicial);
+  const fim = dataUTC(filtros.dataFinal);
+  const limite = adicionarMeses(inicio, MESES_MAXIMOS_EXPORTACAO);
+
+  return fim > limite ? MENSAGEM_PERIODO_MAXIMO : "";
+}
+
+
+export default function RelatoriosAvancados() {
   const [aba, setAba] = useState("resumo");
   const [filtros, setFiltros] = useState(filtrosIniciais);
   const [periodoGrafico, setPeriodoGrafico] = useState(lerUltimoPeriodoRelatorio);
   const [periodoGerado, setPeriodoGerado] = useState("");
   const [metricas, setMetricas] = useState(criarMetricasVazias);
+  const [turmas, setTurmas] = useState([]);
+  const [termoBuscaAluno, setTermoBuscaAluno] = useState("");
+  const [alunosEncontrados, setAlunosEncontrados] = useState([]);
+  const [alunoSelecionado, setAlunoSelecionado] = useState(null);
+  const [buscaAlunoRealizada, setBuscaAlunoRealizada] = useState(false);
+  const [carregandoTurmas, setCarregandoTurmas] = useState(false);
+  const [buscandoAluno, setBuscandoAluno] = useState(false);
 
   const [resumo, setResumo] = useState([]);
   const [mesesAbertos, setMesesAbertos] = useState({});
@@ -127,11 +175,6 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
 
   const [carregando, setCarregando] = useState(false);
   const [mensagem, setMensagem] = useState("");
-
-  const alunosDoFiltro = useMemo(() => {
-    if (!filtros.turmaId) return alunos;
-    return alunos.filter((aluno) => Number(aluno.turma_id || aluno.turmaId) === Number(filtros.turmaId));
-  }, [alunos, filtros.turmaId]);
 
   const resumoMensal = useMemo(() => {
     const mapaMeses = resumo.reduce((meses, item) => {
@@ -221,8 +264,32 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
   const maiorMetrica = Math.max(metricas.presentes, metricas.ausentes, metricas.justificados, metricas.atrasos, 1);
   const periodoGeradoLabel = PERIODOS_GRAFICO.find((periodo) => periodo.valor === periodoGerado)?.label || "";
 
+  function limparAlunoSelecionado() {
+    setAlunoSelecionado(null);
+    setAlunosEncontrados([]);
+    setBuscaAlunoRealizada(false);
+    setTermoBuscaAluno("");
+    setFiltros((atual) => ({ ...atual, alunoId: "" }));
+  }
+
+  function alterarBuscaAluno(valor) {
+    setTermoBuscaAluno(valor);
+    setMensagem("");
+
+    if (!alunoSelecionado && !filtros.alunoId) return;
+
+    setAlunoSelecionado(null);
+    setAlunosEncontrados([]);
+    setBuscaAlunoRealizada(false);
+    setFiltros((atual) => ({ ...atual, alunoId: "" }));
+  }
+
   function limparFiltros() {
     setFiltros(filtrosIniciais);
+    setAlunoSelecionado(null);
+    setAlunosEncontrados([]);
+    setBuscaAlunoRealizada(false);
+    setTermoBuscaAluno("");
     setMesesAbertos({});
     setDiasAbertos({});
     setPaginaJustificativas(1);
@@ -250,6 +317,13 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
       return proximos;
     });
 
+    if (campo === "turmaId") {
+      setAlunoSelecionado(null);
+      setAlunosEncontrados([]);
+      setBuscaAlunoRealizada(false);
+      setTermoBuscaAluno("");
+    }
+
     setMesesAbertos({});
     setDiasAbertos({});
     setPaginaJustificativas(1);
@@ -276,6 +350,79 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
     const proximoResumo = data.itens || [];
     setResumo(proximoResumo);
     return proximoResumo;
+  }
+
+  async function carregarTurmasRelatorio() {
+    setCarregandoTurmas(true);
+
+    try {
+      const data = await apiFetch("/api/relatorios/filtros/turmas");
+      setTurmas(data.turmas || []);
+    } catch (error) {
+      console.error("Erro ao carregar turmas dos relatórios:", error);
+      setMensagem("Não foi possível carregar as turmas dos relatórios.");
+    } finally {
+      setCarregandoTurmas(false);
+    }
+  }
+
+  async function buscarAlunosRelatorio() {
+    const termo = String(termoBuscaAluno || "").trim();
+
+    if (!filtros.turmaId) {
+      setMensagem("Selecione uma turma para pesquisar alunos.");
+      setAlunosEncontrados([]);
+      setAlunoSelecionado(null);
+      setBuscaAlunoRealizada(false);
+      setFiltros((atual) => ({ ...atual, alunoId: "" }));
+      return;
+    }
+
+    if (termo.length < 2) {
+      setMensagem("Informe pelo menos 2 caracteres para pesquisar aluno.");
+      setAlunosEncontrados([]);
+      setAlunoSelecionado(null);
+      setBuscaAlunoRealizada(false);
+      setFiltros((atual) => ({ ...atual, alunoId: "" }));
+      return;
+    }
+
+    setBuscandoAluno(true);
+    setMensagem("");
+
+    try {
+      const data = await apiFetch("/api/relatorios/filtros/alunos", {
+        params: {
+          busca: termo,
+          turmaId: filtros.turmaId,
+        },
+      });
+      const alunos = data.alunos || [];
+
+      setAlunosEncontrados(alunos);
+      setBuscaAlunoRealizada(true);
+
+      if (alunos.length === 1) {
+        selecionarAluno(alunos[0]);
+        return;
+      }
+
+      setAlunoSelecionado(null);
+      setFiltros((atual) => ({ ...atual, alunoId: "" }));
+    } catch (error) {
+      console.error("Erro ao pesquisar aluno:", error);
+      setMensagem("Não foi possível pesquisar alunos no momento.");
+    } finally {
+      setBuscandoAluno(false);
+    }
+  }
+
+  function selecionarAluno(aluno) {
+    setAlunoSelecionado(aluno);
+    setTermoBuscaAluno(aluno.nome || "");
+    setAlunosEncontrados([]);
+    setBuscaAlunoRealizada(false);
+    setFiltros((atual) => ({ ...atual, alunoId: String(aluno.id) }));
   }
 
   function alternarMes(chaveMes) {
@@ -341,6 +488,10 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
   }, []);
 
   useEffect(() => {
+    carregarTurmasRelatorio();
+  }, []);
+
+  useEffect(() => {
     if (aba !== "justificativas" || justificativasCarregadas) return;
 
     carregarJustificativas(1).catch((error) => {
@@ -350,6 +501,18 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
   }, [aba, justificativasCarregadas]);
 
   async function exportarExcel() {
+    if (filtros.alunoId && !filtros.turmaId) {
+      setMensagem("Selecione uma turma antes de filtrar por aluno.");
+      return;
+    }
+
+    const erroPeriodo = validarPeriodoExportacao(filtros);
+
+    if (erroPeriodo) {
+      setMensagem(erroPeriodo);
+      return;
+    }
+
     setCarregando(true);
     setMensagem("");
 
@@ -410,7 +573,6 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
               <input
                 type="date"
                 value={filtros.dataInicial}
-                disabled={Boolean(filtros.data)}
                 onChange={(event) => alterarFiltro("dataInicial", event.target.value)}
               />
             </label>
@@ -420,7 +582,6 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
               <input
                 type="date"
                 value={filtros.dataFinal}
-                disabled={Boolean(filtros.data)}
                 onChange={(event) => alterarFiltro("dataFinal", event.target.value)}
               />
             </label>
@@ -435,19 +596,78 @@ export default function RelatoriosAvancados({ turmas = [], alunos = [] }) {
                   </option>
                 ))}
               </select>
+              {carregandoTurmas && <small>Carregando turmas...</small>}
             </label>
 
-            <label>
-              Aluno
-              <select value={filtros.alunoId} onChange={(event) => alterarFiltro("alunoId", event.target.value)}>
-                <option value="">Todos</option>
-                {alunosDoFiltro.map((aluno) => (
-                  <option key={aluno.id} value={aluno.id}>
-                    {aluno.nome}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="admin-report-student-filter">
+              <label htmlFor="busca-aluno-relatorio">Aluno</label>
+              <div className="admin-report-search-row">
+                <input
+                  id="busca-aluno-relatorio"
+                  type="search"
+                  value={filtros.turmaId ? termoBuscaAluno : ""}
+                  placeholder={filtros.turmaId ? "Pesquisar aluno" : "Selecione uma turma"}
+                  disabled={!filtros.turmaId}
+                  readOnly={!filtros.turmaId}
+                  onChange={(event) => alterarBuscaAluno(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      buscarAlunosRelatorio();
+                    }
+                  }}
+                />
+                <button
+                  className="admin-icon-btn"
+                  type="button"
+                  title={filtros.turmaId ? "Pesquisar aluno" : "Selecione uma turma para pesquisar alunos"}
+                  aria-label={filtros.turmaId ? "Pesquisar aluno" : "Selecione uma turma para pesquisar alunos"}
+                  onClick={buscarAlunosRelatorio}
+                  disabled={!filtros.turmaId || buscandoAluno}
+                >
+                  <Search size={16} />
+                </button>
+                {filtros.turmaId && (alunoSelecionado || filtros.alunoId) && (
+                  <button
+                    className="admin-icon-btn secondary"
+                    type="button"
+                    title="Limpar aluno"
+                    aria-label="Limpar aluno"
+                    onClick={limparAlunoSelecionado}
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+
+              {!filtros.turmaId && <small>Selecione uma turma para pesquisar alunos.</small>}
+
+              {filtros.turmaId && buscandoAluno && <small>Pesquisando...</small>}
+
+              {filtros.turmaId && alunoSelecionado && (
+                <small className="admin-report-selected-message">Aluno selecionado</small>
+              )}
+
+              {filtros.turmaId && buscaAlunoRealizada && alunosEncontrados.length === 0 && (
+                <small className="admin-report-search-empty">Aluno não encontrado nessa turma</small>
+              )}
+
+              {filtros.turmaId && alunosEncontrados.length > 1 && (
+                <div className="admin-report-student-results">
+                  {alunosEncontrados.map((aluno) => (
+                    <button
+                      type="button"
+                      key={aluno.id}
+                      className={Number(filtros.alunoId) === Number(aluno.id) ? "active" : ""}
+                      onClick={() => selecionarAluno(aluno)}
+                    >
+                      <span>{aluno.nome}</span>
+                      <small>{aluno.turma_nome || aluno.turma || "Sem turma"}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="admin-report-actions">
               <button className="admin-primary-btn" type="button" onClick={exportarExcel} disabled={carregando}>

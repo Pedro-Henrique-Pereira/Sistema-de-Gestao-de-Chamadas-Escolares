@@ -1689,6 +1689,93 @@ textarea:focus,
   border-color: #bfdbfe;
 }
 
+.admin-report-student-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 240px;
+  position: relative;
+}
+
+.admin-report-student-filter > label {
+  font-weight: 700;
+  color: var(--admin-muted);
+}
+
+.admin-report-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 44px;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-report-search-row .admin-icon-btn {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 12px;
+}
+
+.admin-report-search-row .admin-icon-btn.secondary {
+  border-color: var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+}
+
+.admin-report-selected-message,
+.admin-report-student-results span {
+  color: var(--admin-text);
+}
+
+.admin-report-student-results small,
+.admin-report-search-empty {
+  color: var(--admin-muted);
+}
+
+.admin-report-student-results {
+  position: absolute;
+  top: 76px;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: var(--admin-card);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.16);
+  padding: 6px;
+}
+
+.admin-report-student-results button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--admin-text);
+  text-align: left;
+  border-radius: 10px;
+  box-shadow: none !important;
+}
+
+.admin-report-student-results button:hover {
+  background: #eef4ff;
+  transform: none;
+}
+
+.admin-report-student-results button.active {
+  background: #eef4ff;
+}
+
 .admin-danger-btn,
 .danger-button,
 .admin-logout-icon-btn {

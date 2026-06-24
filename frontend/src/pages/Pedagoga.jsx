@@ -83,8 +83,6 @@ function Pedagoga() {
   });
   const [mensagem, setMensagem] = useState("");
   const [configAtraso, setConfigAtraso] = useState({ horarioLimiteAtraso: "07:45", atrasoLiberado: false, horarioServidor: "" });
-  const [relatorioTurmas, setRelatorioTurmas] = useState([]);
-  const [relatorioAlunos, setRelatorioAlunos] = useState([]);
   const [mensagemWhatsappTexto, setMensagemWhatsappTexto] = useState("");
   const [mensagemWhatsappModalAberto, setMensagemWhatsappModalAberto] = useState(false);
   const [maquinaPadraoChamadas, setMaquinaPadraoChamadas] = useState("");
@@ -245,12 +243,6 @@ function Pedagoga() {
     }
   }
 
-  async function carregarDadosRelatoriosPedagogo() {
-    const { data } = await api.get("/api/pedagoga/relatorios/dados");
-    setRelatorioTurmas(data.turmas || []);
-    setRelatorioAlunos(data.alunos || []);
-  }
-
   async function carregarDadosIniciais() {
     try {
       setLoading(true);
@@ -310,7 +302,6 @@ function Pedagoga() {
       }
 
       if (pagina === "relatorios") {
-        await carregarDadosRelatoriosPedagogo();
         cache.relatoriosCarregados = true;
         cache.filtrosCarregados = true;
       }
@@ -1336,7 +1327,7 @@ function Pedagoga() {
             ) : (
               <>
                 <div className="cards-grid report-daily-summary"><div className="summary-card"><span className="card-icon">CR</span><div><h3>{resumoRelatorios.chamadas}</h3><p>Chamadas registradas hoje</p></div></div><div className="summary-card"><span className="card-icon">PR</span><div><h3>{resumoRelatorios.presencas}</h3><p>Presenças hoje</p></div></div><div className="summary-card"><span className="card-icon">FT</span><div><h3>{resumoRelatorios.faltas}</h3><p>Faltas hoje</p></div></div><div className="summary-card delay-card"><span className="card-icon">AT</span><div><h3>{dashboard?.resumo?.totalAtrasos || 0}</h3><p>Atrasos hoje</p></div></div></div>
-                <RelatoriosAvancados turmas={relatorioTurmas} alunos={relatorioAlunos} />
+                <RelatoriosAvancados />
               </>
             )}
           </section>
