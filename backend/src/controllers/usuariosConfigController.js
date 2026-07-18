@@ -1,21 +1,20 @@
 const bcrypt = require("bcrypt");
 const db = require("../database/db");
-const { formatarEmail, formatarNome } = require("../utils/formatadores");
+const {
+  validarNomeUsuario,
+  validarEmailUsuario,
+  validarSenhaUsuario,
+  normalizarErroEmailDuplicado,
+} = require("../utils/usuarioValidation");
+const { serializarUsuarioPublico } = require("../utils/publicDtos");
+const { limparCookiesAutenticacao } = require("../utils/authCookies");
 
 async function configurar(req, res, next) {
   try {
     const usuarioId = Number(req.usuario.id);
-    const nome = formatarNome(req.body.nome || "");
-    const email = formatarEmail(req.body.email || "");
-    const senha = String(req.body.senha || "").trim();
-
-    if (!nome || nome.length < 2) {
-      return res.status(400).json({ erro: "Nome inválido." });
-    }
-
-    if (!email || !email.includes("@")) {
-      return res.status(400).json({ erro: "E-mail inválido." });
-    }
+    const nome = validarNomeUsuario(req.body.nome);
+    const email = validarEmailUsuario(req.body.email);
+    const senha = validarSenhaUsuario(req.body.senha);
 
     const [emailExistente] = await db.execute(
       "SELECT id FROM usuarios WHERE email = ? AND id <> ? LIMIT 1",
@@ -27,10 +26,6 @@ async function configurar(req, res, next) {
     }
 
     if (senha) {
-      if (senha.length < 6) {
-        return res.status(400).json({ erro: "A senha deve ter pelo menos 6 caracteres." });
-      }
-
       const senhaHash = await bcrypt.hash(senha, 10);
       const connection = await db.getConnection();
 
@@ -60,9 +55,17 @@ async function configurar(req, res, next) {
       [usuarioId]
     );
 
-    return res.json({ mensagem: "Configurações atualizadas com sucesso.", usuario: rows[0] });
+    if (senha) {
+      limparCookiesAutenticacao(res);
+    }
+
+    return res.json({
+      mensagem: "Configurações atualizadas com sucesso.",
+      usuario: serializarUsuarioPublico(rows[0]),
+      sessaoEncerrada: Boolean(senha),
+    });
   } catch (error) {
-    return next(error);
+    return next(normalizarErroEmailDuplicado(error));
   }
 }
 

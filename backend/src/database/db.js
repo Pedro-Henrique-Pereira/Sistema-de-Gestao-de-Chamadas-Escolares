@@ -19,7 +19,10 @@ const pool = mysql.createPool({
 
 pool.on("connection", (connection) => {
   connection.query(`SET time_zone = '${DB_TIMEZONE}'`, (error) => {
-    if (error) console.error("Falha ao configurar fuso horário da conexão MySQL:", error.message);
+    if (error) {
+      const codigo = String(error.code || "DB_TIMEZONE_ERROR");
+      console.error(`Falha ao configurar fuso horario da conexao MySQL. code=${codigo}`);
+    }
   });
 });
 

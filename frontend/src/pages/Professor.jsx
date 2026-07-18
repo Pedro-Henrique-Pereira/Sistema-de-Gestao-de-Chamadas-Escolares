@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getUsuarioLogado, logout as logoutService } from "../services/authService";
+import { useAuth } from "../context/AuthContext";
 import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
 import {
   atualizarChamada,
@@ -10,6 +10,7 @@ import {
 } from "../services/chamadasService";
 import { buscarConfiguracaoEscola } from "../services/configuracoesEscolaService";
 import { atualizarConfiguracoesUsuario } from "../services/usuariosService";
+import { registrarErroCliente } from "../utils/clientLogger";
 import "../styles/Professor.css";
 
 const MIN_CARACTERES_BUSCA_DISCIPLINA = 2;
@@ -36,12 +37,17 @@ function normalizarChamada(chamada) {
     alunos: chamada.alunos || [],
     totalPresentes: chamada.total_presentes || 0,
     totalAusentes: chamada.total_ausentes || 0,
+    status: chamada.status,
+    statusFluxo: chamada.status_fluxo || String(chamada.status || "").toUpperCase(),
+    versao: Number(chamada.versao || 1),
+    confirmadoEm: chamada.confirmado_em || null,
     podeEditar: Boolean(chamada.pode_editar),
     podeMarcarAtraso: Boolean(chamada.pode_marcar_atraso || chamada.atraso_liberado),
   };
 }
 
 export default function Professor() {
+  const { usuario, sair: encerrarSessao, definirUsuarioAutenticado } = useAuth();
   const [usuarioLogado, setUsuarioLogado] = useState(null);
   const [turmasDisponiveis, setTurmasDisponiveis] = useState([]);
   const [turmaSelecionada, setTurmaSelecionada] = useState("");
@@ -55,6 +61,7 @@ export default function Professor() {
   const [salvando, setSalvando] = useState(false);
   const [configAtraso, setConfigAtraso] = useState({ horarioLimiteAtraso: "07:45", atrasoLiberado: false, horarioServidor: "" });
   const [historicoAberto, setHistoricoAberto] = useState({});
+  const [erroInicial, setErroInicial] = useState("");
 
   async function carregarHistorico() {
     const data = await listarHistoricoChamadas({ data: hojeLocalISO() });
@@ -78,19 +85,12 @@ export default function Professor() {
   useEffect(() => {
     async function iniciar() {
       try {
-        const data = await getUsuarioLogado();
-
-        if (data.usuario.tipo !== "professor") {
-          window.location.href = "/login";
-          return;
-        }
-
-        setUsuarioLogado(data.usuario);
-        setConfigForm({ nome: data.usuario.nome || "", email: data.usuario.email || "", senha: "" });
+        setUsuarioLogado(usuario);
+        setConfigForm({ nome: usuario?.nome || "", email: usuario?.email || "", senha: "" });
 
         await Promise.all([carregarHistorico(), carregarTurmas(""), carregarConfiguracaoAtraso()]);
-      } catch {
-        window.location.href = "/login";
+      } catch (error) {
+        setErroInicial(error.message || "Não foi possível carregar todos os dados da área do professor.");
       } finally {
         setCarregando(false);
       }
@@ -103,7 +103,8 @@ export default function Professor() {
     const timeoutId = setTimeout(() => {
       const termo = String(disciplina || "").trim();
       if (!chamadaEditandoId && (termo.length === 0 || termo.length >= MIN_CARACTERES_BUSCA_DISCIPLINA)) {
-        carregarTurmas(termo).catch(console.error);
+        carregarTurmas(termo)
+          .catch((error) => registrarErroCliente("professor.carregarTurmas", error));
       }
     }, 900);
 
@@ -124,7 +125,8 @@ export default function Professor() {
 
   async function selecionarTurma(idTurma) {
     setTurmaSelecionada(idTurma);
-    await carregarConfiguracaoAtraso().catch(console.error);
+    await carregarConfiguracaoAtraso()
+      .catch((error) => registrarErroCliente("professor.carregarConfiguracaoAtraso", error));
 
     const turma = turmasDisponiveis.find((item) => String(item.id) === idTurma);
 
@@ -149,7 +151,7 @@ export default function Professor() {
   }
 
   function professorPodeEditar(chamada) {
-    return Boolean(chamada.podeEditar) || Number(chamada.professorId) === Number(usuarioLogado?.id);
+    return Boolean(chamada.podeEditar);
   }
 
   async function editarChamada(chamada) {
@@ -215,6 +217,7 @@ export default function Professor() {
         status_presenca: presencas[aluno.id] || "ausente",
         atrasado: Boolean(aluno.atrasado),
       })),
+      versao: chamadasRealizadas.find((chamada) => chamada.id === chamadaEditandoId)?.versao,
     };
 
     try {
@@ -260,7 +263,7 @@ export default function Professor() {
         return;
       }
 
-      await marcarAlunoAtrasado(chamada.id, alunoId);
+      await marcarAlunoAtrasado(chamada.id, alunoId, chamada.versao);
       await Promise.all([carregarHistorico(), carregarConfiguracaoAtraso()]);
       alert("Aluno marcado como atrasado com sucesso.");
     } catch (error) {
@@ -272,11 +275,9 @@ export default function Professor() {
 
   async function logout() {
     try {
-      await logoutService();
-    } catch (error) {
-      console.error("Erro ao sair:", error);
-    } finally {
-      window.location.href = "/login";
+      await encerrarSessao();
+    } catch {
+      // O contexto remove o estado local mesmo se o servidor já tiver encerrado a sessão.
     }
   }
 
@@ -292,7 +293,14 @@ export default function Professor() {
       if (configForm.senha.trim()) payload.senha = configForm.senha.trim();
 
       const data = await atualizarConfiguracoesUsuario(payload);
+      if (data.sessaoEncerrada) {
+        alert("Senha atualizada. Entre novamente para continuar.");
+        await encerrarSessao();
+        return;
+      }
+
       setUsuarioLogado(data.usuario);
+      definirUsuarioAutenticado(data.usuario);
       setConfigForm({ nome: data.usuario.nome || "", email: data.usuario.email || "", senha: "" });
       setModalConfigAberto(false);
       alert("Configurações atualizadas com sucesso!");
@@ -338,6 +346,11 @@ export default function Professor() {
       </header>
 
       <section className="professor-content">
+        {erroInicial && (
+          <div className="empty-state" role="alert">
+            {erroInicial} Atualize a página para tentar novamente.
+          </div>
+        )}
         <div className="empty-state atraso-info-card">
           <strong>Horário máximo de chegada: {configAtraso.horarioLimiteAtraso}</strong>
           <span>{configAtraso.atrasoLiberado ? "Atrasos permitidos até o horário limite pelo relógio do servidor." : `Após o horário limite, atrasos viram falta. Servidor: ${configAtraso.horarioServidor || "--:--"}`}</span>
@@ -438,7 +451,8 @@ export default function Professor() {
                     setChamadaEditandoId(null);
                     setTurmaSelecionada("");
                     setPresencas({});
-                    carregarTurmas(disciplina).catch(console.error);
+                    carregarTurmas(disciplina)
+                      .catch((error) => registrarErroCliente("professor.buscarDisciplina", error));
                   }}
                 >
                   Cancelar edição
@@ -467,12 +481,16 @@ export default function Professor() {
             {chamadasRealizadas.length === 0 && <div className="empty-state">Nenhum registro encontrado</div>}
             {chamadasRealizadas.map((chamada) => {
               const podeEditar = professorPodeEditar(chamada);
+              const confirmada = chamada.statusFluxo === "CONFIRMADA" || chamada.statusFluxo === "BLOQUEADA";
 
               return (
                 <article className="historico-card" key={chamada.id}>
                   <div>
                     <strong>{chamada.turmaNome}</strong>
                     <span>{chamada.disciplina}</span>
+                    <span className={`call-flow-badge ${confirmada ? "confirmed" : "temporary"}`}>
+                      {confirmada ? "Confirmada pela pedagogia" : "Aguardando confirmacao"}
+                    </span>
                   </div>
 
                   <div>
@@ -490,6 +508,7 @@ export default function Professor() {
                       type="button"
                       className="editar-chamada-button"
                       disabled={!podeEditar}
+                      title={!podeEditar && confirmada ? "Esta chamada ja foi confirmada pela pedagogia." : ""}
                       onClick={() => editarChamada(chamada)}
                     >
                       Editar
@@ -515,7 +534,7 @@ export default function Professor() {
                         return (
                           <div className="historico-aluno-row" key={`${chamada.id}-${alunoId}`}>
                             <span>{aluno.nome}</span>
-                            <small>{atrasado ? "Atrasado" : status === "presente" ? "Presente" : "Ausente"}</small>
+                            <small>{atrasado ? `Atrasado${aluno.atraso_minutos != null ? ` - ${aluno.atraso_minutos} min` : ""}` : status === "presente" ? "Presente" : "Ausente"}</small>
                             <button
                               type="button"
                               className="editar-chamada-button"

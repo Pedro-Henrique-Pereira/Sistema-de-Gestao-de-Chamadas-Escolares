@@ -26,6 +26,7 @@ router.post("/chamadas-pedagogicas", pedagogaController.criarChamadaPedagogica);
 router.put("/chamadas/:id", pedagogaController.atualizarChamada);
 router.get("/relatorios/dados", pedagogaController.dadosRelatorios);
 router.get("/responsaveis", pedagogaController.responsaveis);
+router.post("/responsaveis/pesquisar", pedagogaController.responsaveis);
 router.put("/responsaveis/:id", pedagogaController.atualizarResponsavel);
 
 module.exports = router;

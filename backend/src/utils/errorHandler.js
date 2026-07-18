@@ -1,7 +1,17 @@
+function obterStatusError(error) {
+  return Number(
+    error?.status
+    || error?.statusCode
+    || (error?.code === "ER_DUP_ENTRY" ? 409 : 500)
+  );
+}
+
 function safeLogError(contexto, error) {
-  const status = Number(error?.status || error?.statusCode || 500);
+  const status = obterStatusError(error);
   const code = error?.code ? String(error.code) : "ERR_INTERNAL";
-  const mensagem = status >= 500
+  const mensagem = error?.code === "ER_DUP_ENTRY"
+    ? "Conflito de unicidade interceptado."
+    : status >= 500
     ? "Erro interno interceptado. Detalhes sensíveis omitidos."
     : String(error?.message || "Erro operacional interceptado.");
 
@@ -9,7 +19,7 @@ function safeLogError(contexto, error) {
 }
 
 function mensagemPublica(error, fallback = "Ocorreu um erro interno no servidor") {
-  const status = Number(error?.status || error?.statusCode || 500);
+  const status = obterStatusError(error);
 
   if (status >= 500) {
     return fallback;
@@ -19,9 +29,9 @@ function mensagemPublica(error, fallback = "Ocorreu um erro interno no servidor"
 }
 
 function errorMiddleware(err, req, res, next) {
-  safeLogError(`${req.method} ${req.originalUrl}`, err);
+  safeLogError(`${req.method} ${req.path || "/"}`, err);
 
-  const status = Number(err?.status || err?.statusCode || 500);
+  const status = obterStatusError(err);
   const erro = err?.code === "ER_DUP_ENTRY"
     ? "Já existe um registro com esses dados."
     : mensagemPublica(err);
@@ -29,8 +39,13 @@ function errorMiddleware(err, req, res, next) {
   return res.status(status).json({ erro });
 }
 
+function notFoundMiddleware(req, res) {
+  return res.status(404).json({ erro: "Rota não encontrada." });
+}
+
 module.exports = {
   safeLogError,
   mensagemPublica,
+  notFoundMiddleware,
   errorMiddleware,
 };

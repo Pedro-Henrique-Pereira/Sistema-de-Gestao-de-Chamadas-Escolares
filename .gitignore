@@ -21,10 +21,17 @@ AGENTS.md
 banco_dados.md
 .agents
 .codex
+.secrets/
+.cloudflared/
+cloudflared/
+*-credentials.json
+.npmrc
 *.pem
 *.key
 *.p12
 *.pfx
+*.jks
+*.keystore
 id_rsa
 id_dsa
 *.local
@@ -39,6 +46,7 @@ yarn-error.log*
 
 # banco / dumps / backups
 *.sql
+!backend/src/database/migrations/2026-07-16_novo_fluxo_chamadas.sql
 *.sqlite
 *.db
 *.dump
@@ -47,12 +55,24 @@ backup/
 backups/
 *.tests/
 .tests/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# volumes e overrides locais do Docker
+docker-data/
+mysql-data/
+volumes/
+compose.override*.yml
+docker-compose.override*.yml
 
 # sistema/editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+.vite/
 
 # python / automacao local
 __pycache__/

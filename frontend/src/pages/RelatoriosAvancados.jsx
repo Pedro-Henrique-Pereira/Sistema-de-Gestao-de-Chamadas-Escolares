@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
 import { apiDownload, apiFetch } from "../services/api";
 import { dataBrasiliaISO } from "../utils/brasiliaTime";
+import {
+  lerCachePrivado,
+  salvarCachePrivado,
+} from "../utils/privateDataCache";
+import { registrarErroCliente } from "../utils/clientLogger";
 
 const filtrosIniciais = {
   data: dataBrasiliaISO(),
@@ -34,34 +39,23 @@ function chaveCacheRelatorios(periodo) {
 }
 
 function lerCacheRelatorios(periodo) {
-  try {
-    const cache = JSON.parse(sessionStorage.getItem(chaveCacheRelatorios(periodo)) || "null");
-    if (!cache || !cache.metricas || !Array.isArray(cache.resumo)) return null;
-    return cache;
-  } catch {
-    return null;
-  }
+  const cache = lerCachePrivado(chaveCacheRelatorios(periodo));
+  if (!cache || !cache.metricas || !Array.isArray(cache.resumo)) return null;
+  return cache;
 }
 
 function salvarCacheRelatorios(periodo, metricas, resumo) {
-  try {
-    sessionStorage.setItem(RELATORIOS_ULTIMO_PERIODO_KEY, periodo);
-    sessionStorage.setItem(
-      chaveCacheRelatorios(periodo),
-      JSON.stringify({
-        geradoEm: new Date().toISOString(),
-        periodo,
-        metricas,
-        resumo,
-      })
-    );
-  } catch {
-    // Cache local é otimização; falha de armazenamento não deve bloquear relatórios.
-  }
+  salvarCachePrivado(RELATORIOS_ULTIMO_PERIODO_KEY, periodo);
+  salvarCachePrivado(chaveCacheRelatorios(periodo), {
+    geradoEm: new Date().toISOString(),
+    periodo,
+    metricas,
+    resumo,
+  });
 }
 
 function lerUltimoPeriodoRelatorio() {
-  const periodo = sessionStorage.getItem(RELATORIOS_ULTIMO_PERIODO_KEY);
+  const periodo = lerCachePrivado(RELATORIOS_ULTIMO_PERIODO_KEY);
   return PERIODOS_GRAFICO.some((item) => item.valor === periodo) ? periodo : "1m";
 }
 
@@ -359,7 +353,7 @@ export default function RelatoriosAvancados() {
       const data = await apiFetch("/api/relatorios/filtros/turmas");
       setTurmas(data.turmas || []);
     } catch (error) {
-      console.error("Erro ao carregar turmas dos relatórios:", error);
+      registrarErroCliente("relatorios.carregarTurmas", error);
       setMensagem("Não foi possível carregar as turmas dos relatórios.");
     } finally {
       setCarregandoTurmas(false);
@@ -392,10 +386,11 @@ export default function RelatoriosAvancados() {
 
     try {
       const data = await apiFetch("/api/relatorios/filtros/alunos", {
-        params: {
+        method: "POST",
+        body: JSON.stringify({
           busca: termo,
           turmaId: filtros.turmaId,
-        },
+        }),
       });
       const alunos = data.alunos || [];
 
@@ -410,7 +405,7 @@ export default function RelatoriosAvancados() {
       setAlunoSelecionado(null);
       setFiltros((atual) => ({ ...atual, alunoId: "" }));
     } catch (error) {
-      console.error("Erro ao pesquisar aluno:", error);
+      registrarErroCliente("relatorios.pesquisarAluno", error);
       setMensagem("Não foi possível pesquisar alunos no momento.");
     } finally {
       setBuscandoAluno(false);
@@ -475,7 +470,7 @@ export default function RelatoriosAvancados() {
       salvarCacheRelatorios(periodoGrafico, metricasPeriodo, resumoPeriodo);
       setPeriodoGerado(periodoGrafico);
     } catch (error) {
-      console.error("Erro ao carregar relatórios avançados:", error);
+      registrarErroCliente("relatorios.carregarResumo", error);
       setMensagem("Não foi possível carregar o relatório no momento.");
     } finally {
       setCarregando(false);
@@ -495,7 +490,7 @@ export default function RelatoriosAvancados() {
     if (aba !== "justificativas" || justificativasCarregadas) return;
 
     carregarJustificativas(1).catch((error) => {
-      console.error("Erro ao carregar justificativas:", error);
+      registrarErroCliente("relatorios.carregarJustificativas", error);
       setMensagem("NÃ£o foi possÃ­vel carregar o histÃ³rico de justificativas.");
     });
   }, [aba, justificativasCarregadas]);
@@ -531,7 +526,7 @@ export default function RelatoriosAvancados() {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (error) {
-      console.error("Erro ao exportar relatório:", error);
+      registrarErroCliente("relatorios.exportar", error);
       setMensagem(error.message || "Não foi possível carregar o relatório no momento.");
     } finally {
       setCarregando(false);
@@ -723,18 +718,18 @@ export default function RelatoriosAvancados() {
             <article className="admin-card">
               <span>Faltas justificadas</span>
               <strong>{metricas.justificados}</strong>
-              <small>{percentuais.justificadas}% do total</small>
+              <small>{percentuais.justificadas}% das faltas · incluídas nas ausências</small>
             </article>
 
             <article className="admin-card">
               <span>Atrasos registrados</span>
               <strong>{metricas.atrasos}</strong>
-              <small>{percentuais.atrasos}% do total</small>
+              <small>{percentuais.atrasos}% das presenças · incluídos nas presenças</small>
             </article>
           </div>
 
           <div className="admin-chart-box">
-            <h3>Presenças, faltas, justificativas e atrasos no ano</h3>
+            <h3>Presenças e faltas com suas subcategorias no período</h3>
 
             <div className="admin-chart annual-chart">
               <div className="bar-presenca" style={{ height: `${Math.max((metricas.presentes / maiorMetrica) * 100, 12)}%` }}>
@@ -748,12 +743,12 @@ export default function RelatoriosAvancados() {
               </div>
 
               <div className="bar-justificada" style={{ height: `${Math.max((metricas.justificados / maiorMetrica) * 100, 12)}%` }}>
-                <span>Justificados</span>
+                <span>Justificados nas faltas</span>
                 <strong>{percentuais.justificadas}%</strong>
               </div>
 
               <div className="bar-atraso" style={{ height: `${Math.max((metricas.atrasos / maiorMetrica) * 100, 12)}%` }}>
-                <span>Atraso</span>
+                <span>Atrasos nas presenças</span>
                 <strong>{percentuais.atrasos}%</strong>
               </div>
             </div>

@@ -7,14 +7,13 @@ const { autenticar, autorizar } = require('../middlewares/authMiddleware');
 router.use(autenticar);
 router.use(autorizar('administracao'));
 
-router.get('/', controller.listarDados);
-
 router.get('/turmas', controller.listarTurmas);
 router.post('/turmas', controller.criarTurma);
 router.put('/turmas/:id', controller.atualizarTurma);
 router.delete('/turmas/:id', controller.removerTurma);
 
 router.get('/alunos', controller.listarAlunos);
+router.post('/alunos/pesquisar', controller.listarAlunos);
 router.post('/alunos', controller.criarAluno);
 router.put('/alunos/:id', controller.atualizarAluno);
 router.patch('/alunos/:id/turma', controller.atualizarTurmaAluno);

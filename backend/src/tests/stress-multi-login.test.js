@@ -8,11 +8,24 @@ const CONFIG = {
   delayBetweenBatchesMs: 50
 };
 
-const USUARIOS = [
-  { tipo: "administrador", email: "administrador@gmail.com", senha: "123456" },
-  { tipo: "pedagoga", email: "pedagoga@gmail.com", senha: "123456" },
-  { tipo: "professor", email: "professor@gmail.com", senha: "123456" }
-];
+function carregarUsuarioAmbiente(tipo, prefixo) {
+  const email = String(process.env[`STRESS_${prefixo}_EMAIL`] || "").trim();
+  const senha = String(process.env[`STRESS_${prefixo}_PASSWORD`] || "");
+
+  if (!email || !senha) {
+    throw new Error(`Credenciais de stress ausentes para o perfil ${tipo}.`);
+  }
+
+  return { tipo, email, senha };
+}
+
+function carregarUsuariosStress() {
+  return [
+    carregarUsuarioAmbiente("administrador", "ADMIN"),
+    carregarUsuarioAmbiente("pedagoga", "PEDAGOGA"),
+    carregarUsuarioAmbiente("professor", "PROFESSOR"),
+  ];
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -65,7 +78,7 @@ async function login(usuario) {
   }
 
   return {
-    ...usuario,
+    tipo: usuario.tipo,
     tempoLoginMs: tempo,
     cookieHeader: cookies.map((c) => c.split(";")[0]).join("; ")
   };
@@ -86,7 +99,7 @@ async function main() {
 
   console.log("\nRealizando login dos usuários...");
 
-  const sessoes = await Promise.all(USUARIOS.map(login));
+  const sessoes = await Promise.all(carregarUsuariosStress().map(login));
 
   sessoes.forEach((s) => {
     console.log(

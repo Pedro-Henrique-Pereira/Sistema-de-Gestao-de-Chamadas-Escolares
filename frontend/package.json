@@ -3,17 +3,22 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/tests/authRouting.test.js src/tests/frequenciaMetricas.test.js src/tests/atrasosSync.test.js src/tests/privateDataCache.test.js src/tests/apiUrlSecurity.test.js",
+    "test:auth": "node --test src/tests/authRouting.test.js"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.5.2",
+    "@vitejs/plugin-react": "^5.2.0",
     "lucide-react": "^1.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.15.1",
-    "vite": "^5.4.19"
+    "vite": "^7.3.6"
   }
 }

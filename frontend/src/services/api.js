@@ -1,11 +1,14 @@
+import { apiUrlSeguraEmProducao } from "../utils/apiUrlSecurity";
+
 const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
 const METODOS_SEGUROS = new Set(["GET", "HEAD", "OPTIONS"]);
-const ENDPOINTS_PUBLICOS_AUTH = new Set([
+const ENDPOINTS_SEM_NOTIFICACAO_GLOBAL_401 = new Set([
   "/api/auth/login",
   "/api/auth/dev-login",
   "/api/auth/dev-users",
   "/api/auth/csrf-token",
+  "/api/auth/me",
 ]);
 
 const MENSAGEM_SESSAO_EXPIRADA =
@@ -15,8 +18,8 @@ if (!API_URL) {
   throw new Error("VITE_API_URL não configurada para o frontend.");
 }
 
-if (import.meta.env.PROD && !API_URL.startsWith("https://")) {
-  throw new Error("Em produção, VITE_API_URL deve usar HTTPS.");
+if (import.meta.env.PROD && !apiUrlSeguraEmProducao(API_URL)) {
+  throw new Error("Em produção, VITE_API_URL deve usar HTTPS ou loopback local.");
 }
 
 function getCookie(nome) {
@@ -65,16 +68,24 @@ function montarUrl(endpoint, params) {
   return `${API_URL}${caminho}${queryString}`;
 }
 
-function deveRedirecionarPorSessao(endpoint) {
-  const caminho = normalizarEndpoint(endpoint);
-  return !ENDPOINTS_PUBLICOS_AUTH.has(caminho) && window.location.pathname !== "/login";
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
 }
 
-function redirecionarParaLoginPorSessao(response, endpoint) {
-  if (response.status !== 401 || !deveRedirecionarPorSessao(endpoint)) return;
+function deveNotificarSessaoInvalida(endpoint) {
+  const caminho = normalizarEndpoint(endpoint);
+  return !ENDPOINTS_SEM_NOTIFICACAO_GLOBAL_401.has(caminho) && window.location.pathname !== "/login";
+}
+
+function notificarSessaoInvalida(response, endpoint) {
+  if (response.status !== 401 || !deveNotificarSessaoInvalida(endpoint)) return;
 
   sessionStorage.setItem("loginMessage", MENSAGEM_SESSAO_EXPIRADA);
-  window.location.replace("/login");
+  window.dispatchEvent(new CustomEvent("auth:unauthorized"));
 }
 
 async function obterCsrfToken() {
@@ -118,12 +129,12 @@ export async function apiFetch(endpoint, options = {}) {
     credentials: "include",
   });
 
-  redirecionarParaLoginPorSessao(response, endpoint);
+  notificarSessaoInvalida(response, endpoint);
 
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.erro || data?.message || "Erro na requisição");
+    throw new ApiError(data?.erro || data?.message || "Erro na requisição", response.status);
   }
 
   return data;
@@ -140,11 +151,11 @@ export async function apiDownload(endpoint, options = {}) {
     credentials: "include",
   });
 
-  redirecionarParaLoginPorSessao(response, endpoint);
+  notificarSessaoInvalida(response, endpoint);
 
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    throw new Error(data?.erro || data?.message || "Não foi possível gerar o relatório.");
+    throw new ApiError(data?.erro || data?.message || "Não foi possível gerar o relatório.", response.status);
   }
 
   return response.blob();
@@ -162,12 +173,12 @@ async function request(method, endpoint, body, config = {}) {
     body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
   });
 
-  redirecionarParaLoginPorSessao(response, endpoint);
+  notificarSessaoInvalida(response, endpoint);
 
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.erro || data?.message || "Erro na requisição");
+    throw new ApiError(data?.erro || data?.message || "Erro na requisição", response.status);
   }
 
   return { data };

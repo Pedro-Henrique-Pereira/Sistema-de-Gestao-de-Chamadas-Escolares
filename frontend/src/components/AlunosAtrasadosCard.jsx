@@ -1,6 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "../styles/AlunosAtrasadosCard.css";
 import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
+import {
+  ATRASOS_SYNC_INTERVAL_MS,
+  criarChaveCacheAtrasos,
+  deveSincronizarAtrasos,
+} from "../utils/atrasosSync";
+import {
+  lerCachePrivado,
+  salvarCachePrivado,
+} from "../utils/privateDataCache";
 
 function hojeLocalISO() {
   return dataBrasiliaISO();
@@ -45,8 +54,14 @@ function formatarTempo(minutos) {
 }
 
 function calcularTempoAtraso(aluno) {
-  if (Number.isFinite(Number(aluno.minutosAtraso ?? aluno.minutos_atraso))) {
-    return formatarTempo(Number(aluno.minutosAtraso ?? aluno.minutos_atraso));
+  const minutosInformados = aluno.minutosAtraso ?? aluno.minutos_atraso;
+  if (
+    minutosInformados !== null &&
+    minutosInformados !== undefined &&
+    minutosInformados !== "" &&
+    Number.isFinite(Number(minutosInformados))
+  ) {
+    return formatarTempo(Number(minutosInformados));
   }
 
   const horarioChamada = minutosDoHorario(aluno.horarioChamada || aluno.horario_chamada);
@@ -79,28 +94,17 @@ function normalizarAlunoAtrasado(aluno) {
 }
 
 function lerCache(cacheKey) {
-  try {
-    const cache = JSON.parse(sessionStorage.getItem(cacheKey) || "null");
-    if (!cache || cache.data !== hojeLocalISO() || !Array.isArray(cache.alunos)) return null;
-    return cache.alunos;
-  } catch {
-    return null;
-  }
+  const cache = lerCachePrivado(cacheKey);
+  if (!cache || cache.data !== hojeLocalISO() || !Array.isArray(cache.alunos)) return null;
+  return cache.alunos;
 }
 
 function salvarCache(cacheKey, alunos) {
-  try {
-    sessionStorage.setItem(
-      cacheKey,
-      JSON.stringify({
-        data: hojeLocalISO(),
-        geradoEm: dataBrasiliaISO(),
-        alunos,
-      })
-    );
-  } catch {
-    // Falha de armazenamento local não deve quebrar a tela.
-  }
+  salvarCachePrivado(cacheKey, {
+    data: hojeLocalISO(),
+    geradoEm: new Date().toISOString(),
+    alunos,
+  });
 }
 
 export default function AlunosAtrasadosCard({
@@ -110,52 +114,88 @@ export default function AlunosAtrasadosCard({
   horarioLimiteAtraso = "07:45",
   onVoltar,
 }) {
-  const cacheKey = `alunos_atrasados_${cacheNamespace}_${hojeLocalISO()}`;
+  const cacheKey = criarChaveCacheAtrasos(hojeLocalISO(), cacheNamespace);
   const [alunosBase, setAlunosBase] = useState(() => lerCache(cacheKey) || alunos || []);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState("");
+  const carregandoRef = useRef(false);
+  const carregarAlunosRef = useRef(carregarAlunosAtrasados);
 
   const podeGerarLista = passouDoHorarioLimite(horarioLimiteAtraso);
 
-  const carregarLista = useCallback(async () => {
-    const cache = lerCache(cacheKey);
-    if (cache) {
-      setAlunosBase(cache);
-      return;
-    }
+  useEffect(() => {
+    carregarAlunosRef.current = carregarAlunosAtrasados;
+  }, [carregarAlunosAtrasados]);
 
-    if (!podeGerarLista || typeof carregarAlunosAtrasados !== "function") return;
+  const carregarLista = useCallback(async ({ silencioso = false } = {}) => {
+    const carregar = carregarAlunosRef.current;
+    if (!deveSincronizarAtrasos({
+      podeGerarLista,
+      carregando: carregandoRef.current,
+      temCarregador: typeof carregar === "function",
+    })) return;
 
-    setCarregando(true);
-    setErro("");
+    carregandoRef.current = true;
+    if (!silencioso) setCarregando(true);
+    if (!silencioso) setErro("");
 
     try {
-      const resultado = await carregarAlunosAtrasados();
+      const resultado = await carregar();
       const lista = Array.isArray(resultado) ? resultado : [];
       setAlunosBase(lista);
       salvarCache(cacheKey, lista);
+      setErro("");
     } catch (error) {
-      setErro(error.message || "Não foi possível carregar a lista de alunos atrasados.");
+      if (!silencioso) {
+        setErro(error.message || "Não foi possível sincronizar a lista de alunos atrasados.");
+      }
     } finally {
-      setCarregando(false);
+      carregandoRef.current = false;
+      if (!silencioso) setCarregando(false);
     }
-  }, [cacheKey, carregarAlunosAtrasados, podeGerarLista]);
+  }, [cacheKey, podeGerarLista]);
 
   useEffect(() => {
     const cache = lerCache(cacheKey);
-    if (cache) {
-      setAlunosBase(cache);
-      return;
-    }
+    if (cache) setAlunosBase(cache);
 
     if (Array.isArray(alunos) && alunos.length > 0) {
       setAlunosBase(alunos);
       salvarCache(cacheKey, alunos);
-      return;
     }
 
-    carregarLista();
-  }, [alunos, cacheKey, carregarLista]);
+    if (!podeGerarLista) return undefined;
+
+    carregarLista({ silencioso: Boolean(cache || alunos.length) });
+
+    const sincronizarSeVisivel = () => {
+      if (deveSincronizarAtrasos({
+        podeGerarLista,
+        carregando: carregandoRef.current,
+        temCarregador: typeof carregarAlunosRef.current === "function",
+        documentoVisivel: document.visibilityState === "visible",
+      })) {
+        carregarLista({ silencioso: true });
+      }
+    };
+
+    const intervalo = window.setInterval(
+      sincronizarSeVisivel,
+      ATRASOS_SYNC_INTERVAL_MS
+    );
+    window.addEventListener("focus", sincronizarSeVisivel);
+
+    return () => {
+      window.clearInterval(intervalo);
+      window.removeEventListener("focus", sincronizarSeVisivel);
+    };
+  }, [cacheKey, carregarLista, podeGerarLista]);
+
+  useEffect(() => {
+    if (!Array.isArray(alunos) || alunos.length === 0) return;
+    setAlunosBase(alunos);
+    salvarCache(cacheKey, alunos);
+  }, [alunos, cacheKey]);
 
   const alunosAtrasados = useMemo(() => {
     return (Array.isArray(alunosBase) ? alunosBase : [])
@@ -179,7 +219,16 @@ export default function AlunosAtrasadosCard({
             <span className="late-students-eyebrow">Painel integrado de monitoramento</span>
             <h2 id="late-students-title">Alunos Atrasados</h2>
           </div>
-          <strong>{alunosAtrasados.length}</strong>
+          <div className="late-students-header-actions">
+            <button
+              type="button"
+              onClick={() => carregarLista()}
+              disabled={carregando || !podeGerarLista}
+            >
+              Atualizar
+            </button>
+            <strong>{alunosAtrasados.length}</strong>
+          </div>
         </div>
 
         {!podeGerarLista ? (

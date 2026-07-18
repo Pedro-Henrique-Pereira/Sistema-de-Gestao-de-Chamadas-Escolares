@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 import { API_URL, apiFetch } from "../services/api";
+import { login } from "../services/authService";
+import { useAuth } from "../context/AuthContext";
+import { rotaInicialPorPerfil } from "../utils/authRouting";
 import "../styles/Login.css";
 
 export default function Login() {
+  const navigate = useNavigate();
+  const { definirUsuarioAutenticado } = useAuth();
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [mostrarSenha, setMostrarSenha] = useState(false);
@@ -28,10 +34,9 @@ export default function Login() {
   const frontendEmLocalhost = hostEhLocalhost(window.location.hostname);
   const backendEmLocalhost = apiBaseEhLocalhost(API_URL);
   const loginRapidoDevHabilitado =
+    import.meta.env.DEV &&
     frontendEmLocalhost &&
-    backendEmLocalhost &&
-    (import.meta.env.DEV || import.meta.env.VITE_DEV_LOGIN === "true");
-
+    backendEmLocalhost;
 
   useEffect(() => {
     if (!loginRapidoDevHabilitado) return;
@@ -67,7 +72,8 @@ export default function Login() {
         body: JSON.stringify({ id: usuarioId }),
       });
 
-      redirecionarPorCargo(data.usuario.tipo);
+      definirUsuarioAutenticado(data.usuario);
+      navigate(rotaInicialPorPerfil(data.usuario?.tipo), { replace: true });
     } catch (error) {
       setErro(error.message || "Erro no login rápido de desenvolvimento.");
     } finally {
@@ -88,13 +94,7 @@ export default function Login() {
     try {
       setCarregando(true);
 
-      const data = await apiFetch("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({
-          email,
-          senha,
-        }),
-      });
+      const data = await login(email, senha);
 
       const usuario = data.usuario;
 
@@ -102,39 +102,13 @@ export default function Login() {
         throw new Error("Resposta inválida do servidor.");
       }
 
-      redirecionarPorCargo(usuario.tipo);
+      definirUsuarioAutenticado(usuario);
+      navigate(rotaInicialPorPerfil(usuario.tipo), { replace: true });
 
     } catch (error) {
       setErro(error.message || "Erro ao fazer login.");
-
-      setTimeout(() => {
-        setErro("");
-      }, 4000);
-
     } finally {
       setCarregando(false);
-    }
-  }
-
-  function redirecionarPorCargo(tipo) {
-
-    switch (tipo) {
-
-      case "administracao":
-        window.location.href = "/admin";
-        break;
-
-      case "pedagoga":
-        window.location.href = "/pedagoga";
-        break;
-
-      case "professor":
-        window.location.href = "/professor";
-        break;
-
-      default:
-        setErro("Tipo de usuário não reconhecido.");
-        break;
     }
   }
 

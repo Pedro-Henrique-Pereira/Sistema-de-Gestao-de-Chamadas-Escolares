@@ -10,7 +10,7 @@ export const pedagogaService = {
   turmasPendentes: () => api.get("/api/pedagoga/turmas-pendentes"),
   criarChamadaPedagogica: (payload) => api.post("/api/pedagoga/chamadas-pedagogicas", payload),
   atualizarChamadaTemporaria: (id, payload) => api.put(`/api/pedagoga/chamadas/${id}`, payload),
-  marcarAlunoAtrasado: (chamadaId, alunoId) => api.patch(`/api/chamadas/${chamadaId}/atraso`, { aluno_id: alunoId }),
+  marcarAlunoAtrasado: (chamadaId, alunoId, versao) => api.patch(`/api/chamadas/${chamadaId}/atraso`, { aluno_id: alunoId, versao }),
   solicitarAutomacaoWhatsApp: (payload = {}) => api.post("/api/pedagoga/automacao-whatsapp/solicitar", payload),
   consultarStatusAutomacaoWhatsApp: (id) => api.get(`/api/pedagoga/automacao-whatsapp/status/${id}`),
   obterMensagemWhatsApp: () => api.get("/api/pedagoga/automacao-whatsapp/mensagem"),

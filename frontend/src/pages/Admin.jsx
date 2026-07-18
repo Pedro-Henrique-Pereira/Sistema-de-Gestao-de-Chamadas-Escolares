@@ -5,11 +5,36 @@ import { buscarConfiguracaoEscola, salvarConfiguracaoEscola } from "../services/
 import RelatoriosAvancados from "./RelatoriosAvancados";
 import MensagensAdmin from "./MensagensAdmin";
 import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
+import TurmasDashboardCard from "../components/TurmasDashboardCard";
+import { useAuth } from "../context/AuthContext";
+import { ATRASOS_CACHE_NAMESPACE } from "../utils/atrasosSync";
+import { registrarErroCliente } from "../utils/clientLogger";
 import "../styles/Admin.css";
 
 const MIN_CARACTERES_BUSCA_ALUNOS = 2;
 
+function normalizarDashboard(data = {}, alunosAtrasadosAtuais = []) {
+  const resumo = data.resumo || {};
+
+  return {
+    data: data.data || "",
+    alunosCadastrados: Number(resumo.alunosCadastrados ?? data.alunosCadastrados ?? 0),
+    chamadasHoje: Number(resumo.chamadasHoje || 0),
+    chamadasPendentes: Number(resumo.chamadasPendentes || 0),
+    presentes: Number(resumo.totalPresentes ?? data.presentes ?? 0),
+    ausentes: Number(resumo.totalFaltas ?? data.ausentes ?? 0),
+    justificados: Number(resumo.totalJustificadas ?? data.justificados ?? 0),
+    atrasos: Number(resumo.totalAtrasos ?? data.atrasos ?? 0),
+    taxaFrequencia: Number(resumo.taxaFrequencia || 0),
+    turmas: Array.isArray(data.turmas) ? data.turmas : [],
+    alunosAtrasados: Array.isArray(data.alunosAtrasados)
+      ? data.alunosAtrasados
+      : alunosAtrasadosAtuais,
+  };
+}
+
 export default function Administrador() {
+  const { usuario, sair: encerrarSessao } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [telaAtiva, setTelaAtiva] = useState("painel");
   const [abaPainel, setAbaPainel] = useState("geral");
@@ -54,11 +79,16 @@ export default function Administrador() {
   const [carregandoRegistros, setCarregandoRegistros] = useState(false);
   const [erroRegistros, setErroRegistros] = useState("");
   const [metricasDia, setMetricasDia] = useState({
+    data: "",
     alunosCadastrados: 0,
+    chamadasHoje: 0,
+    chamadasPendentes: 0,
     presentes: 0,
     ausentes: 0,
     justificados: 0,
     atrasos: 0,
+    taxaFrequencia: 0,
+    turmas: [],
     alunosAtrasados: [],
   });
   const [salvandoConfig, setSalvandoConfig] = useState(false);
@@ -84,8 +114,9 @@ export default function Administrador() {
     setErroRegistros("");
 
     try {
-      const data = await apiFetch("/api/registros/alunos", {
-        params: { page, limit: 50, busca },
+      const data = await apiFetch("/api/registros/alunos/pesquisar", {
+        method: "POST",
+        body: JSON.stringify({ page, limit: 50, busca }),
       });
       const alunosPagina = data.alunos || data.dados || [];
       const meta = {
@@ -134,16 +165,12 @@ export default function Administrador() {
   async function carregarMetricasPainel() {
     try {
       const data = await apiFetch("/api/admin/painel");
-      setMetricasDia((metricasAtuais) => ({
-        alunosCadastrados: Number(data.alunosCadastrados || 0),
-        presentes: Number(data.presentes || 0),
-        ausentes: Number(data.ausentes || 0),
-        justificados: Number(data.justificados || 0),
-        atrasos: Number(data.atrasos || 0),
-        alunosAtrasados: metricasAtuais.alunosAtrasados || [],
-      }));
+      setMetricasDia((metricasAtuais) => normalizarDashboard(
+        data,
+        metricasAtuais.alunosAtrasados || []
+      ));
     } catch (error) {
-      console.error("Erro ao carregar métricas do painel:", error);
+      registrarErroCliente("admin.carregarMetricas", error);
     }
   }
 
@@ -154,14 +181,7 @@ export default function Administrador() {
 
     const lista = Array.isArray(data.alunosAtrasados) ? data.alunosAtrasados : [];
 
-    setMetricasDia({
-      alunosCadastrados: Number(data.alunosCadastrados || 0),
-      presentes: Number(data.presentes || 0),
-      ausentes: Number(data.ausentes || 0),
-      justificados: Number(data.justificados || 0),
-      atrasos: Number(data.atrasos || 0),
-      alunosAtrasados: lista,
-    });
+    setMetricasDia(normalizarDashboard({ ...data, alunosAtrasados: lista }));
 
     return lista;
   }
@@ -172,7 +192,7 @@ export default function Administrador() {
       setHorarioLimiteAtraso(String(data.horarioLimiteAtraso || data.horario_limite_atraso || "07:45").slice(0, 5));
       setTempoMaximoJustificativasMeses(Number(data.tempoMaximoJustificativasMeses || data.tempo_maximo_justificativas_meses || 1));
     } catch (error) {
-      console.error("Erro ao carregar configuração da escola:", error);
+      registrarErroCliente("admin.carregarConfiguracao", error);
     }
   }
 
@@ -218,7 +238,7 @@ export default function Administrador() {
         }
       }
     } catch (error) {
-      console.error("Erro ao carregar dados da tela:", error);
+      registrarErroCliente("admin.carregarTela", error);
     } finally {
       requisicoesEmAndamentoRef.current[tela] = false;
     }
@@ -227,7 +247,7 @@ export default function Administrador() {
   function trocarTela(tela) {
     setTelaAtiva(tela);
     fecharSidebarMobile();
-    carregarTelaSobDemanda(tela).catch(console.error);
+    carregarTelaSobDemanda(tela).catch((error) => registrarErroCliente("admin.carregarSobDemanda", error));
   }
 
   async function handleSalvarHorarioLimite(event) {
@@ -275,13 +295,12 @@ export default function Administrador() {
   useEffect(() => {
     async function iniciarPagina() {
       try {
-        const data = await apiFetch("/api/auth/me");
-        setUsuarioLogado(data.usuario);
+        setUsuarioLogado(usuario);
         await Promise.all([carregarMetricasPainel(), carregarConfiguracaoEscola()]);
         cacheRef.current.dashboardCarregado = true;
         cacheRef.current.configAtrasoCarregada = true;
       } catch (error) {
-        window.location.href = "/login";
+        setMensagemConfig(error.message || "Não foi possível carregar todos os dados iniciais.");
       }
     }
 
@@ -290,10 +309,9 @@ export default function Administrador() {
 
   async function sair() {
     try {
-      await apiFetch("/api/auth/logout", { method: "POST" });
-      window.location.href = "/login";
-    } catch (error) {
-      console.error("Erro ao sair:", error);
+      await encerrarSessao();
+    } catch {
+      // O contexto remove o estado local mesmo se o servidor já tiver encerrado a sessão.
     }
   }
 
@@ -381,7 +399,8 @@ useEffect(() => {
 
 useEffect(() => {
   if (telaAtiva !== "registros" || abaRegistros !== "alunos") return;
-  carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced }).catch(console.error);
+  carregarAlunosPaginados({ page: paginaAlunos, busca: pesquisaAlunoDebounced })
+    .catch((error) => registrarErroCliente("admin.carregarAlunos", error));
 }, [telaAtiva, abaRegistros, paginaAlunos, pesquisaAlunoDebounced]);
 
 useEffect(() => {
@@ -429,13 +448,13 @@ useEffect(() => {
 const totalMetricasDia =
   metricasDia.presentes + metricasDia.ausentes;
 
-const calcularPercentual = (valor) =>
-  totalMetricasDia > 0 ? Math.round((Number(valor || 0) / totalMetricasDia) * 100) : 0;
+const calcularPercentual = (valor, total) =>
+  total > 0 ? Math.round((Number(valor || 0) / total) * 100) : 0;
 
-const porcentagemPresenca = calcularPercentual(metricasDia.presentes);
-const porcentagemAusencia = calcularPercentual(metricasDia.ausentes);
-const porcentagemJustificada = calcularPercentual(metricasDia.justificados);
-const porcentagemAtraso = calcularPercentual(metricasDia.atrasos);
+const porcentagemPresenca = calcularPercentual(metricasDia.presentes, totalMetricasDia);
+const porcentagemAusencia = calcularPercentual(metricasDia.ausentes, totalMetricasDia);
+const porcentagemJustificada = calcularPercentual(metricasDia.justificados, metricasDia.ausentes);
+const porcentagemAtraso = calcularPercentual(metricasDia.atrasos, metricasDia.presentes);
 
 const categoriasEquipe = [
   {
@@ -742,7 +761,8 @@ async function handleRemoverEquipe(idPessoa) {
     setSalvandoConfig(true);
     setMensagemConfig("");
 
-    const formData = new FormData(event.currentTarget);
+    const formulario = event.currentTarget;
+    const formData = new FormData(formulario);
 
     const dadosAdmin = {
       nome: formData.get("nome"),
@@ -756,9 +776,15 @@ async function handleRemoverEquipe(idPessoa) {
         body: JSON.stringify(dadosAdmin),
       });
 
+      if (data.sessaoEncerrada) {
+        alert("Senha atualizada. Entre novamente para continuar.");
+        await encerrarSessao();
+        return;
+      }
+
       setUsuarioLogado(data.usuario);
       setMensagemConfig(data.mensagem || "Configurações atualizadas com sucesso.");
-      event.currentTarget.reset();
+      formulario.reset();
     } catch (error) {
       setMensagemConfig(error.message || "Erro ao atualizar configurações.");
     } finally {
@@ -899,6 +925,16 @@ async function handleRemoverEquipe(idPessoa) {
                   </article>
 
                   <article className="admin-card">
+                    <span>Chamadas hoje</span>
+                    <strong>{metricasDia.chamadasHoje}</strong>
+                  </article>
+
+                  <article className="admin-card">
+                    <span>Chamadas pendentes</span>
+                    <strong>{metricasDia.chamadasPendentes}</strong>
+                  </article>
+
+                  <article className="admin-card">
                     <span>Presenças</span>
                     <strong>{metricasDia.presentes}</strong>
                   </article>
@@ -911,13 +947,22 @@ async function handleRemoverEquipe(idPessoa) {
                   <article className="admin-card">
                     <span>Justificados</span>
                     <strong>{metricasDia.justificados}</strong>
+                    <small>Incluídos nas ausências</small>
                   </article>
 
                   <article className="admin-card">
                     <span>Atraso</span>
                     <strong>{metricasDia.atrasos}</strong>
+                    <small>Incluídos nas presenças</small>
+                  </article>
+
+                  <article className="admin-card">
+                    <span>Taxa de frequência</span>
+                    <strong>{metricasDia.taxaFrequencia}%</strong>
                   </article>
                 </div>
+
+                <TurmasDashboardCard turmas={metricasDia.turmas} />
 
                 <form className="chart-card atraso-config-card" onSubmit={handleSalvarHorarioLimite}>
                   <h3>Horário Máximo de Chegada</h3>
@@ -954,7 +999,7 @@ async function handleRemoverEquipe(idPessoa) {
                 </form>
 
                 <div className="chart-card">
-                  <h3>Distribuição dos indicadores diários</h3>
+                  <h3>Indicadores e composição diária</h3>
 
                   <div className="chart-bars">
                     <div>
@@ -984,7 +1029,7 @@ async function handleRemoverEquipe(idPessoa) {
                       >
                         {porcentagemJustificada}%
                       </div>
-                      <span>Justificados</span>
+                      <span>Justificados nas ausências</span>
                     </div>
 
                     <div>
@@ -994,7 +1039,7 @@ async function handleRemoverEquipe(idPessoa) {
                       >
                         {porcentagemAtraso}%
                       </div>
-                      <span>Atraso</span>
+                      <span>Atrasos nas presenças</span>
                     </div>
                   </div>
                 </div>
@@ -1003,7 +1048,7 @@ async function handleRemoverEquipe(idPessoa) {
               <AlunosAtrasadosCard
                 alunos={metricasDia.alunosAtrasados}
                 carregarAlunosAtrasados={carregarAlunosAtrasadosPainel}
-                cacheNamespace="admin"
+                cacheNamespace={ATRASOS_CACHE_NAMESPACE}
                 horarioLimiteAtraso={horarioLimiteAtraso}
               />
             )}
@@ -1710,6 +1755,8 @@ async function handleRemoverEquipe(idPessoa) {
                   type="text"
                   placeholder="Nome completo"
                   defaultValue={modalEquipe.pessoa?.nome || ""}
+                  minLength={2}
+                  maxLength={100}
                   required
                 />
 
@@ -1718,6 +1765,7 @@ async function handleRemoverEquipe(idPessoa) {
                   type="email"
                   placeholder="E-mail"
                   defaultValue={modalEquipe.pessoa?.email || ""}
+                  maxLength={100}
                   required
                 />
 
@@ -1726,6 +1774,7 @@ async function handleRemoverEquipe(idPessoa) {
                   type="password"
                   placeholder={modalEquipe.tipo === "editar" ? "Nova senha (opcional)" : "Senha"}
                   defaultValue=""
+                  minLength={6}
                   required={modalEquipe.tipo !== "editar"}
                 />
 
@@ -1867,6 +1916,8 @@ async function handleRemoverEquipe(idPessoa) {
                   name="nome"
                   placeholder="Informe seu nome completo"
                   defaultValue={usuarioLogado?.nome || "Administrador"}
+                  minLength={2}
+                  maxLength={100}
                   required
                 />
               </label>
@@ -1878,6 +1929,7 @@ async function handleRemoverEquipe(idPessoa) {
                   name="email"
                   placeholder="Informe seu e-mail institucional"
                   defaultValue={usuarioLogado?.email || "admin@email.com"}
+                  maxLength={100}
                   required
                 />
               </label>
@@ -1888,6 +1940,7 @@ async function handleRemoverEquipe(idPessoa) {
                   type="password"
                   name="senha"
                   placeholder="Nova senha, se desejar alterar"
+                  minLength={6}
                 />
               </label>
 

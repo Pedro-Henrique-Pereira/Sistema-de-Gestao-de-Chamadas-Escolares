@@ -2,10 +2,14 @@ const db = require("../database/db");
 const { garantirConfiguracao, horarioParaMinutos } = require("./configuracoesEscolaController");
 const { garantirColunasAtraso } = require("../utils/atrasoUtils");
 const chamadaService = require("../services/chamadaService");
+const fluxoService = require("../services/chamadaFluxoService");
+const { registrarAuditoria } = require("../services/chamadaAuditoriaService");
+const { contarTotaisFrequencia, condicoesFrequenciaSql } = require("../services/frequenciaMetricasService");
 const { safeLogError } = require("../utils/errorHandler");
 const { dataBrasiliaISO, horarioBrasilia, dataHoraBrasiliaMySQL } = require("../utils/brasiliaTime");
 
 const STATUS_VALIDOS = new Set(["presente", "ausente"]);
+const FREQUENCIA_SQL = condicoesFrequenciaSql("f");
 
 function alunoEstaAusente(aluno) {
   return String(aluno.status_presenca || aluno.status || "").toLowerCase() === "ausente";
@@ -32,7 +36,7 @@ function montarAlunosJSON(alunos = []) {
     throw erro;
   }
 
-  return alunos.map((aluno) => {
+  const alunosNormalizados = alunos.map((aluno) => {
     const status = STATUS_VALIDOS.has(aluno.status_presenca)
       ? aluno.status_presenca
       : STATUS_VALIDOS.has(aluno.status)
@@ -48,21 +52,19 @@ function montarAlunosJSON(alunos = []) {
       atrasado,
       horario_registro_atraso: atrasado ? (aluno.horario_registro_atraso || aluno.horarioRegistroAtraso || null) : null,
       atraso_registrado_em: atrasado ? (aluno.atraso_registrado_em || aluno.atrasoRegistradoEm || null) : null,
+      atraso_minutos: atrasado ? Number(aluno.atraso_minutos || aluno.atrasoMinutos || 0) : null,
+      motivo: String(aluno.motivo || aluno.justificativa || "").trim() || null,
     };
-  }).filter((aluno) => aluno.aluno_id && aluno.nome);
-}
+  });
 
-function calcularTotais(alunos) {
-  return alunos.reduce(
-    (acc, aluno) => {
-      if (aluno.status_presenca === "presente") acc.total_presentes += 1;
-      else acc.total_ausentes += 1;
-      return acc;
-    },
-    { total_presentes: 0, total_ausentes: 0 }
-  );
-}
+  if (alunosNormalizados.some((aluno) => !aluno.aluno_id || !aluno.nome)) {
+    const erro = new Error("Todos os alunos precisam possuir ID e nome válidos.");
+    erro.status = 400;
+    throw erro;
+  }
 
+  return alunosNormalizados;
+}
 
 async function validarAlunosPertencemTurma(connection, turmaId, alunos) {
   const ids = [...new Set(alunos.map((aluno) => Number(aluno.aluno_id)).filter(Boolean))];
@@ -79,19 +81,15 @@ async function validarAlunosPertencemTurma(connection, turmaId, alunos) {
     throw erro;
   }
 
-  const placeholders = ids.map(() => "?").join(",");
   const [rows] = await connection.execute(
-    `SELECT id FROM alunos WHERE turma_id = ? AND id IN (${placeholders})`,
-    [turmaId, ...ids]
+    "SELECT id FROM alunos WHERE turma_id = ? ORDER BY id ASC",
+    [turmaId]
   );
 
-  if (rows.length !== ids.length) {
-    const idsEncontrados = new Set(rows.map((row) => Number(row.id)));
-    const idsInvalidos = ids.filter((id) => !idsEncontrados.has(id));
-    const erro = new Error(`Há aluno(s) que não pertencem à turma selecionada: ${idsInvalidos.join(", ")}.`);
-    erro.status = 400;
-    throw erro;
-  }
+  fluxoService.assertPermission(
+    fluxoService.validateCompleteStudentList(rows, alunos),
+    409
+  );
 }
 
 function erroDuplicidadeChamada(error) {
@@ -201,7 +199,7 @@ async function historico(req, res, next) {
   try {
     const { data, turma_id, materia } = req.query;
     const filtros = [];
-    const params = [Number(req.usuario.id)];
+    const params = [];
 
     if (req.usuario.tipo === "professor") {
       filtros.push("cd.professor_id = ?");
@@ -242,7 +240,8 @@ async function historico(req, res, next) {
         cd.total_presentes,
         cd.total_ausentes,
         cd.status,
-        (cd.professor_id = ?) AS pode_editar
+        cd.confirmado_em,
+        cd.versao
       FROM chamadas_diarias cd
       ${where}
       ORDER BY cd.data_chamada DESC, cd.horario_chamada DESC, cd.id DESC
@@ -253,8 +252,9 @@ async function historico(req, res, next) {
 
     const chamadas = rows.map((chamada) => ({
       ...chamada,
-      pode_editar: Boolean(chamada.pode_editar),
-      pode_marcar_atraso: atrasoLiberado,
+      status_fluxo: fluxoService.statusEfetivo(chamada, configAtraso),
+      pode_editar: fluxoService.canProfessorEditCall(chamada, req.usuario).permitido,
+      pode_marcar_atraso: atrasoLiberado && fluxoService.canProfessorEditCall(chamada, req.usuario).permitido,
       atraso_liberado: atrasoLiberado,
       alunos: parseAlunos(chamada.alunos),
     }));
@@ -293,30 +293,28 @@ async function criar(req, res, next) {
       return res.status(409).json({ erro: "Essa turma já possui chamada hoje. Não é permitido registrar chamada duplicada para a mesma turma na mesma data." });
     }
 
-    const totais = calcularTotais(alunos);
+    const totais = contarTotaisFrequencia(alunos);
 
-    const [result] = await db.execute(
-      `
-      INSERT INTO chamadas_diarias
-        (professor_id, professor_nome, turma_id, turma_nome, materia, data_chamada, alunos, total_presentes, total_ausentes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        professorId,
-        professor.nome,
-        turmaId,
-        turma.nome,
-        materia,
-        dataChamada,
-        JSON.stringify(alunos),
-        totais.total_presentes,
-        totais.total_ausentes,
-      ]
-    );
+    const result = await chamadaService.executarTransacao(db, async (connection) => {
+      const [insertResult] = await connection.execute(
+        `INSERT INTO chamadas_diarias
+          (professor_id, professor_nome, turma_id, turma_nome, materia, data_chamada, alunos, total_presentes, total_ausentes, status, versao)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendente', 1)`,
+        [professorId, professor.nome, turmaId, turma.nome, materia, dataChamada, JSON.stringify(alunos), totais.total_presentes, totais.total_ausentes]
+      );
+
+      await registrarAuditoria(connection, {
+        chamadaId: insertResult.insertId,
+        usuario: req.usuario,
+        evento: "CHAMADA_CRIADA",
+        valoresNovos: { status: "TEMPORARIA", turma_id: turmaId, materia, totais },
+      });
+      return insertResult;
+    });
 
     return res.status(201).json({
-      mensagem: "Chamada registrada com sucesso.",
-      chamada: { id: result.insertId, ...totais },
+      mensagem: "Chamada temporária salva e enviada para revisão da pedagogia.",
+      chamada: { id: result.insertId, status: "pendente", status_fluxo: "TEMPORARIA", versao: 1, ...totais },
     });
   } catch (error) {
     if (erroDuplicidadeChamada(error)) {
@@ -333,35 +331,70 @@ async function atualizar(req, res, next) {
     const chamadaId = Number(req.params.id);
     const professorId = Number(req.usuario.id);
 
-    const [chamadas] = await db.execute(
-      "SELECT id, professor_id, turma_id FROM chamadas_diarias WHERE id = ? LIMIT 1",
-      [chamadaId]
-    );
+    const resultado = await chamadaService.executarTransacao(db, async (connection) => {
+      const [chamadas] = await connection.execute(
+        "SELECT id, professor_id, turma_id, status, versao, materia, alunos FROM chamadas_diarias WHERE id = ? LIMIT 1 FOR UPDATE",
+        [chamadaId]
+      );
 
-    const chamada = chamadas[0];
-    if (!chamada) return res.status(404).json({ erro: "Chamada não encontrada." });
+      const chamada = chamadas[0];
+      if (!chamada) {
+        const erro = new Error("Chamada nao encontrada.");
+        erro.status = 404;
+        throw erro;
+      }
 
-    if (Number(chamada.professor_id) !== professorId) {
-      return res.status(403).json({ erro: "Você só pode editar chamadas feitas por você." });
-    }
+      fluxoService.assertPermission(fluxoService.canProfessorEditCall(chamada, req.usuario));
+      fluxoService.assertPermission(fluxoService.validateCallVersion(chamada, req.body.versao), 409);
 
-    const materia = normalizarMateria(req.body.materia || req.body.disciplina);
-    const alunos = montarAlunosJSON(req.body.alunos);
-    await validarAlunosPertencemTurma(db, chamada.turma_id, alunos);
-    const totais = calcularTotais(alunos);
+      const materia = normalizarMateria(req.body.materia || req.body.disciplina);
+      const alunos = montarAlunosJSON(req.body.alunos);
+      fluxoService.assertPermission(
+        fluxoService.validateCompleteStudentList(parseAlunos(chamada.alunos), alunos),
+        409
+      );
+      const totais = contarTotaisFrequencia(alunos);
 
-    if (!materia) return res.status(400).json({ erro: "Matéria é obrigatória." });
+      if (!materia) {
+        const erro = new Error("Matéria é obrigatória.");
+        erro.status = 400;
+        throw erro;
+      }
 
-    await db.execute(
-      `
-      UPDATE chamadas_diarias
-      SET materia = ?, alunos = ?, total_presentes = ?, total_ausentes = ?
-      WHERE id = ? AND professor_id = ?
-      `,
-      [materia, JSON.stringify(alunos), totais.total_presentes, totais.total_ausentes, chamadaId, professorId]
-    );
+      const [resultadoAtualizacao] = await connection.execute(
+        `
+        UPDATE chamadas_diarias
+        SET materia = ?, alunos = ?, total_presentes = ?, total_ausentes = ?, versao = versao + 1
+        WHERE id = ? AND professor_id = ? AND status = 'pendente' AND versao = ?
+        `,
+        [materia, JSON.stringify(alunos), totais.total_presentes, totais.total_ausentes, chamadaId, professorId, chamada.versao]
+      );
 
-    return res.json({ mensagem: "Chamada atualizada com sucesso.", chamada: { id: chamadaId, ...totais } });
+      if (resultadoAtualizacao.affectedRows !== 1) {
+        fluxoService.assertPermission(fluxoService.validateCallVersion(null, null), 409);
+      }
+
+      await registrarAuditoria(connection, {
+        chamadaId,
+        usuario: req.usuario,
+        evento: "CHAMADA_EDITADA_PELO_PROFESSOR",
+        valoresAnteriores: { materia: chamada.materia, alunos: parseAlunos(chamada.alunos), versao: chamada.versao },
+        valoresNovos: { materia, alunos, versao: Number(chamada.versao) + 1 },
+      });
+
+      return {
+        chamada: {
+          id: chamadaId,
+          versao: Number(chamada.versao) + 1,
+          ...totais,
+        },
+      };
+    });
+
+    return res.json({
+      mensagem: "Chamada temporária atualizada com sucesso.",
+      chamada: resultado.chamada,
+    });
   } catch (error) {
     return next(error);
   }
@@ -384,10 +417,15 @@ async function marcarAtraso(req, res, next) {
     await connection.beginTransaction();
     transacaoIniciada = true;
 
-    await chamadaService.validarJanelaAtraso(connection);
+    const configFluxo = await garantirConfiguracao(connection);
+    if (fluxoService.hasMaximumArrivalTimePassed(configFluxo)) {
+      const erro = new Error(fluxoService.MENSAGENS.HORARIO_ENCERRADO);
+      erro.status = 403;
+      throw erro;
+    }
 
     const [chamadas] = await connection.execute(
-      `SELECT id, turma_id, turma_nome, professor_id, professor_nome, materia, data_chamada, horario_chamada, alunos, total_presentes, total_ausentes, status FROM chamadas_diarias WHERE id = ? AND data_chamada = ? LIMIT 1 FOR UPDATE`,
+      `SELECT id, turma_id, turma_nome, professor_id, professor_nome, materia, data_chamada, horario_chamada, alunos, total_presentes, total_ausentes, status, versao FROM chamadas_diarias WHERE id = ? AND data_chamada = ? LIMIT 1 FOR UPDATE`,
       [chamadaId, dataBrasiliaISO()]
     );
 
@@ -398,11 +436,15 @@ async function marcarAtraso(req, res, next) {
       throw erro;
     }
 
-    if (req.usuario.tipo === "professor" && Number(chamada.professor_id) !== Number(req.usuario.id)) {
-      const erro = new Error("Você não tem permissão para alterar chamada de outro professor.");
-      erro.status = 403;
-      throw erro;
-    }
+    const permissao = req.usuario.tipo === "professor"
+      ? fluxoService.canProfessorEditCall(chamada, req.usuario)
+      : fluxoService.canPedagogueEditCall(chamada, req.usuario, configFluxo);
+    fluxoService.assertPermission(permissao);
+    fluxoService.assertPermission(fluxoService.validateCallVersion(chamada, req.body.versao), 409);
+
+    const horarioMarcacao = horarioBrasilia();
+    const atrasoMinutos = fluxoService.calculateStudentDelay(chamada.horario_chamada, horarioMarcacao);
+
     if (chamada.status === "pendente") {
       const alunos = parseAlunos(chamada.alunos);
       let alterou = false;
@@ -415,7 +457,7 @@ async function marcarAtraso(req, res, next) {
             throw erro;
           }
           alterou = true;
-          return { ...aluno, status_presenca: "presente", status: "presente", atrasado: true, horario_registro_atraso: horarioBrasilia(), atraso_registrado_em: dataHoraBrasiliaMySQL() };
+          return { ...aluno, status_presenca: "presente", status: "presente", atrasado: true, horario_registro_atraso: horarioMarcacao, atraso_registrado_em: dataHoraBrasiliaMySQL(), atraso_minutos: atrasoMinutos, alterado_por_id: Number(req.usuario.id) };
         }
         return aluno;
       });
@@ -426,17 +468,29 @@ async function marcarAtraso(req, res, next) {
         throw erro;
       }
 
-      const totais = calcularTotais(alunosAtualizados);
+      const totais = contarTotaisFrequencia(alunosAtualizados);
       await connection.execute(
         `UPDATE chamadas_diarias
-         SET alunos = ?, total_presentes = ?, total_ausentes = ?, atraso_processado = TRUE
-         WHERE id = ?`,
-        [JSON.stringify(alunosAtualizados), totais.total_presentes, totais.total_ausentes, chamadaId]
+         SET alunos = ?, total_presentes = ?, total_ausentes = ?, atraso_processado = TRUE, versao = versao + 1
+         WHERE id = ? AND versao = ?`,
+        [JSON.stringify(alunosAtualizados), totais.total_presentes, totais.total_ausentes, chamadaId, chamada.versao]
       );
+
+      await registrarAuditoria(connection, {
+        chamadaId,
+        usuario: req.usuario,
+        evento: "ALUNO_MARCADO_COMO_ATRASADO",
+        valoresNovos: { aluno_id: alunoId, horario_registro_atraso: horarioMarcacao, atraso_minutos: atrasoMinutos },
+      });
 
       await connection.commit();
       transacaoIniciada = false;
-      return res.json({ mensagem: "Aluno marcado como atrasado na chamada temporária.", origem: "temporaria", totais, alunos: alunosAtualizados });
+      return res.json({
+        mensagem: "Aluno marcado como atrasado na chamada temporária.",
+        origem: "temporaria",
+        totais,
+        versao: Number(chamada.versao) + 1,
+      });
     }
 
     if (chamada.status !== "confirmada") {
@@ -475,19 +529,21 @@ async function marcarAtraso(req, res, next) {
        SET status = 'presente',
            atrasado = TRUE,
            horario_registro_atraso = COALESCE(horario_registro_atraso, ?),
-           atraso_registrado_em = COALESCE(atraso_registrado_em, ?)
+           atraso_registrado_em = COALESCE(atraso_registrado_em, ?),
+           atraso_minutos = ?,
+           alterado_por_id = ?
        WHERE id = ?`,
-      [horarioBrasilia(), dataHoraBrasiliaMySQL(), frequencia.id]
+      [horarioMarcacao, dataHoraBrasiliaMySQL(), atrasoMinutos, req.usuario.id, frequencia.id]
     );
 
     const [[totais]] = await connection.execute(
       `SELECT
-         SUM(status = 'presente') AS total_presentes,
-         SUM(status IN ('ausente', 'justificado')) AS total_ausentes,
-         SUM(status = 'justificado') AS total_justificados,
-         SUM(atrasado = TRUE) AS total_atrasos
-       FROM registros_frequencia_alunos
-       WHERE registro_chamada_id = ?`,
+         SUM(${FREQUENCIA_SQL.presente}) AS total_presentes,
+         SUM(${FREQUENCIA_SQL.ausente}) AS total_ausentes,
+         SUM(${FREQUENCIA_SQL.justificado}) AS total_justificados,
+         SUM(${FREQUENCIA_SQL.atrasado}) AS total_atrasos
+       FROM registros_frequencia_alunos f
+       WHERE f.registro_chamada_id = ?`,
       [frequencia.registro_chamada_id]
     );
 
@@ -503,6 +559,18 @@ async function marcarAtraso(req, res, next) {
         frequencia.registro_chamada_id,
       ]
     );
+
+    await connection.execute(
+      "UPDATE chamadas_diarias SET versao = versao + 1 WHERE id = ? AND versao = ?",
+      [chamadaId, chamada.versao]
+    );
+    await registrarAuditoria(connection, {
+      chamadaId,
+      usuario: req.usuario,
+      evento: "ALUNO_MARCADO_COMO_ATRASADO",
+      valoresAnteriores: { aluno_id: alunoId, status: frequencia.status, atrasado: Boolean(frequencia.atrasado) },
+      valoresNovos: { aluno_id: alunoId, status: "presente", atrasado: true, horario_registro_atraso: horarioMarcacao, atraso_minutos: atrasoMinutos },
+    });
 
     await connection.commit();
     transacaoIniciada = false;
@@ -524,6 +592,14 @@ async function marcarAtraso(req, res, next) {
         safeLogError("chamadasController.marcarAtraso.rollback", rollbackError);
       }
     }
+    if (error.message === fluxoService.MENSAGENS.HORARIO_ENCERRADO) {
+      registrarAuditoria(db, {
+        chamadaId: Number(req.params.id),
+        usuario: req.usuario,
+        evento: "EDICAO_BLOQUEADA_POR_HORARIO",
+        valoresNovos: { rota: req.originalUrl },
+      }).catch(() => {});
+    }
     return next(error);
   } finally {
     connection.release();
@@ -537,4 +613,3 @@ module.exports = {
   atualizar,
   marcarAtraso,
 };
-

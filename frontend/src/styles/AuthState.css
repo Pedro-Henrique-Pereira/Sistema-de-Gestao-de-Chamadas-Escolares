@@ -1,0 +1,59 @@
+.auth-state {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  background: #f5f7fb;
+}
+
+.auth-state-card {
+  width: min(100%, 440px);
+  padding: 32px;
+  border: 1px solid #dce3ee;
+  border-radius: 18px;
+  background: #fff;
+  text-align: center;
+  box-shadow: 0 16px 40px rgb(30 55 90 / 10%);
+}
+
+.auth-state-mark {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: #174a7e;
+  color: #fff;
+  font-weight: 800;
+}
+
+.auth-state-card h1 {
+  margin: 0 0 10px;
+  color: #17324d;
+  font-size: clamp(1.25rem, 4vw, 1.65rem);
+}
+
+.auth-state-card p {
+  margin: 0;
+  color: #53677b;
+  line-height: 1.55;
+}
+
+.auth-state-card button {
+  min-height: 44px;
+  margin-top: 22px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 10px;
+  background: #174a7e;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-state-card button:focus-visible {
+  outline: 3px solid #8bb9e8;
+  outline-offset: 3px;
+}

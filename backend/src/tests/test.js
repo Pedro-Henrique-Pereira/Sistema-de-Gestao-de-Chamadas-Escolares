@@ -5,7 +5,16 @@ const db = require("../database/connection");
 
 async function criarUsuarioTeste() {
   try {
-    const senhaHash = await bcrypt.hash("123456", 10);
+    const email = String(process.env.TEST_ADMIN_EMAIL || "").trim().toLowerCase();
+    const senha = String(process.env.TEST_ADMIN_PASSWORD || "");
+
+    if (!email || senha.length < 6) {
+      throw new Error(
+        "Defina TEST_ADMIN_EMAIL e TEST_ADMIN_PASSWORD para criar a conta temporaria."
+      );
+    }
+
+    const senhaHash = await bcrypt.hash(senha, 10);
 
     await db.execute(
       `
@@ -15,7 +24,7 @@ async function criarUsuarioTeste() {
       `,
       [
         "ADMINISTRADOR",
-        "administrador@gmail.com",
+        email,
         senhaHash,
         "administracao",
         true,
@@ -23,12 +32,10 @@ async function criarUsuarioTeste() {
     );
 
     console.log("Usuário criado com sucesso!");
-    console.log("Email: administrador@gmail.com");
-    console.log("Senha: 12138915");
 
     process.exit();
   } catch (error) {
-    console.error("Erro ao criar usuário:", error);
+    console.error(`Erro ao criar usuario de teste. code=${error.code || "TEST_USER_ERROR"}`);
     process.exit(1);
   }
 }

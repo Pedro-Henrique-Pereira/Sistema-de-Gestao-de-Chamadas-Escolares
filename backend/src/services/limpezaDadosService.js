@@ -32,7 +32,7 @@ async function executarLimpezaAutomatica() {
     );
 
     const [resultadoChamadas] = await connection.execute(
-      "DELETE FROM chamadas_diarias WHERE data_chamada < CURDATE()"
+      "DELETE FROM chamadas_diarias WHERE status = 'cancelada' AND data_chamada < DATE_SUB(CURDATE(), INTERVAL 30 DAY)"
     );
 
     await connection.commit();

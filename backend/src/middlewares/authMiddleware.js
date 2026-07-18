@@ -1,22 +1,26 @@
 const jwt = require("jsonwebtoken");
 const db = require("../database/connection");
+const { limparCookiesAutenticacao } = require("../utils/authCookies");
+
+function rejeitarSessao(res, mensagem) {
+  limparCookiesAutenticacao(res);
+  return res.status(401).json({ erro: mensagem });
+}
 
 async function autenticar(req, res, next) {
   const token = req.cookies?.token;
 
   if (!token) {
-    return res.status(401).json({
-      erro: "Acesso negado. Faça login primeiro.",
-    });
+    return rejeitarSessao(res, "Acesso negado. Faça login primeiro.");
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      algorithms: ["HS256"],
+    });
 
     if (!decoded.id || !decoded.jti) {
-      return res.status(401).json({
-        erro: "Sessão inválida. Faça login novamente.",
-      });
+      return rejeitarSessao(res, "Sessão inválida. Faça login novamente.");
     }
 
     const [rows] = await db.execute(
@@ -32,9 +36,7 @@ async function autenticar(req, res, next) {
     );
 
     if (!rows[0] || !rows[0].ativo) {
-      return res.status(401).json({
-        erro: "Sessão inválida ou usuário inativo.",
-      });
+      return rejeitarSessao(res, "Sessão inválida ou usuário inativo.");
     }
 
     req.usuario = {
@@ -45,9 +47,7 @@ async function autenticar(req, res, next) {
 
     next();
   } catch (error) {
-    return res.status(401).json({
-      erro: "Token inválido ou expirado.",
-    });
+    return rejeitarSessao(res, "Token inválido ou expirado.");
   }
 }
 

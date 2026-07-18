@@ -1,4 +1,5 @@
 const db = require('../database/connection');
+const { inserirMensagensGrupoNaFila } = require('../services/filaAutomacaoService');
 
 function validarMaquina(valor) {
   const maquina = Number(valor);
@@ -251,31 +252,20 @@ async function enviarMensagem(req, res, next) {
       [maquinaDestino, req.usuario.id]
     );
 
-    const valoresFila = grupos.map((grupo) => [
-      req.usuario.id,
-      nomeUsuario,
+    const tarefasFila = grupos.map((grupo) => ({
+      usuarioSolicitanteId: req.usuario.id,
+      usuarioSolicitanteNome: nomeUsuario,
       maquinaDestino,
       mensagem,
-      JSON.stringify({
+      payload: JSON.stringify({
         grupo_whatsapp_id: grupo.id,
         nome_grupo_whatsapp: grupo.nome_grupo,
         nome_grupo_whatsapp_busca: normalizarNomeGrupoParaBusca(grupo.nome_grupo),
         origem: 'painel_admin_mensagens',
       }),
-      'pendente',
-    ]);
+    }));
 
-    const [insertResult] = await connection.query(
-      `INSERT INTO fila_automacao
-        (usuario_solicitante_id, usuario_solicitante_nome, maquina_destino, tipo_automacao, mensagem, payload, status)
-       VALUES ?`,
-      [valoresFila.map((linha) => [linha[0], linha[1], linha[2], 'mensagem_grupo', linha[3], linha[4], linha[5]])]
-    );
-
-    const primeiroId = Number(insertResult.insertId || 0);
-    const idsFila = primeiroId > 0
-      ? grupos.map((_, indice) => primeiroId + indice)
-      : [];
+    const idsFila = await inserirMensagensGrupoNaFila(connection, tarefasFila);
 
     await connection.commit();
     transacaoIniciada = false;
@@ -350,4 +340,3 @@ module.exports = {
   enviarMensagem,
   limparTarefasAntigas,
 };
-

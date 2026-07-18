@@ -3,6 +3,7 @@ const db = require("../database/connection");
 const { colunaExiste, garantirColunasAtraso } = require("../utils/atrasoUtils");
 const { safeLogError } = require("../utils/errorHandler");
 const { dataBrasiliaISO } = require("../utils/brasiliaTime");
+const { condicoesFrequenciaSql } = require("../services/frequenciaMetricasService");
 
 const LIMITE_PADRAO = 10;
 const LIMITE_MAXIMO = 100;
@@ -165,19 +166,19 @@ function montarWhereFiltros(filtros = {}) {
 }
 
 function statusPresenteSql(alias = "rfa") {
-  return `LOWER(COALESCE(${alias}.status, '')) IN ('presente', 'atrasado')`;
+  return condicoesFrequenciaSql(alias).presente;
 }
 
 function statusAusenteSql(alias = "rfa") {
-  return `LOWER(COALESCE(${alias}.status, '')) IN ('ausente', 'falta', 'faltou', 'justificado')`;
+  return condicoesFrequenciaSql(alias).ausente;
 }
 
 function statusJustificadoSql(alias = "rfa") {
-  return `LOWER(COALESCE(${alias}.status, '')) = 'justificado'`;
+  return condicoesFrequenciaSql(alias).justificado;
 }
 
 function statusAtrasadoSql(alias = "rfa") {
-  return `(${alias}.atrasado = TRUE OR LOWER(COALESCE(${alias}.status, '')) = 'atrasado')`;
+  return condicoesFrequenciaSql(alias).atrasado;
 }
 
 function logErroRelatorio(contexto, error) {
@@ -239,8 +240,9 @@ async function listarTurmasFiltro(req, res, next) {
 
 async function buscarAlunosFiltro(req, res, next) {
   try {
-    const termo = textoBuscaSeguro(req.query.busca);
-    const turmaId = idSeguro(req.query.turmaId || req.query.turma_id);
+    const corpo = req.body || {};
+    const termo = textoBuscaSeguro(corpo.busca);
+    const turmaId = idSeguro(corpo.turmaId || corpo.turma_id);
 
     if (!turmaId) {
       return res.status(400).json({ erro: "Selecione uma turma para pesquisar alunos." });

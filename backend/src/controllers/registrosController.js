@@ -1,4 +1,11 @@
-const { formatarNome, formatarTurma, formatarEmail } = require("../utils/formatadores");
+const { formatarNome, formatarTurma } = require("../utils/formatadores");
+const {
+  validarNomeUsuario,
+  validarEmailUsuario,
+  validarSenhaUsuario,
+  validarCargoEquipe,
+  normalizarErroEmailDuplicado,
+} = require("../utils/usuarioValidation");
 const bcrypt = require('bcrypt');
 const Registros = require('../models/registrosModel');
 
@@ -19,23 +26,8 @@ function montarPessoaEquipe(id, { nome, email, cargo, status = 'Ativo' }) {
     idade: '',
     cargo,
     email,
-    senha: '',
     status,
   };
-}
-
-async function listarDados(req, res, next) {
-  try {
-    const [turmas, alunos, equipe] = await Promise.all([
-      Registros.listarTurmas(),
-      Registros.listarAlunos(),
-      Registros.listarEquipe(),
-    ]);
-
-    res.json({ turmas, alunos, equipe });
-  } catch (error) {
-    next(error);
-  }
 }
 
 async function listarTurmas(req, res, next) {
@@ -70,15 +62,11 @@ async function removerTurma(req, res, next) {
   try {
     await Registros.removerTurma(req.params.id);
 
-    const [turmas, alunos] = await Promise.all([
-      Registros.listarTurmas(),
-      Registros.listarAlunos(),
-    ]);
+    const turmas = await Registros.listarTurmas();
 
     res.json({
       mensagem: 'Turma removida com sucesso. Os alunos ficaram sem turma.',
       turmas,
-      alunos,
     });
   } catch (error) {
     next(error);
@@ -87,10 +75,18 @@ async function removerTurma(req, res, next) {
 
 async function listarAlunos(req, res, next) {
   try {
+    const entrada = (req.method === 'POST' ? req.body : req.query) || {};
+
+    if (req.method === 'GET' && req.query.busca) {
+      return res.status(400).json({
+        erro: 'Use a pesquisa protegida para buscar dados pessoais de alunos ou responsáveis.',
+      });
+    }
+
     const resultado = await Registros.listarAlunosPaginado({
-      page: req.query.page,
-      limit: req.query.limit,
-      busca: req.query.busca,
+      page: entrada.page,
+      limit: entrada.limit,
+      busca: entrada.busca,
     });
 
     res.json(resultado);
@@ -113,9 +109,9 @@ async function criarAluno(req, res, next) {
     };
 
     const dadosAluno = {
-      ...req.body,
       nome,
       idade,
+      turma_id: req.body.turma_id ? Number(req.body.turma_id) : null,
       turma: req.body.turma ? formatarTurma(req.body.turma) : '',
       __turmaEnviada: Object.prototype.hasOwnProperty.call(req.body, 'turma_id') || Object.prototype.hasOwnProperty.call(req.body, 'turma'),
       responsaveis: responsavelRecebido.nome
@@ -147,9 +143,9 @@ async function atualizarAluno(req, res, next) {
     };
 
     const dadosAluno = {
-      ...req.body,
       nome,
       idade,
+      turma_id: req.body.turma_id ? Number(req.body.turma_id) : null,
       turma: req.body.turma ? formatarTurma(req.body.turma) : '',
       __turmaEnviada: Object.prototype.hasOwnProperty.call(req.body, 'turma_id') || Object.prototype.hasOwnProperty.call(req.body, 'turma'),
       responsaveis: responsavelRecebido.nome
@@ -196,10 +192,10 @@ async function listarEquipe(req, res, next) {
 
 async function criarEquipe(req, res, next) {
   try {
-    const nome = formatarNome(validarTexto(req.body.nome, 'Nome'));
-    const email = formatarEmail(validarTexto(req.body.email, 'Email'));
-    const senha = validarTexto(req.body.senha, 'Senha');
-    const cargo = validarTexto(req.body.cargo, 'Cargo');
+    const nome = validarNomeUsuario(req.body.nome);
+    const email = validarEmailUsuario(req.body.email);
+    const senha = validarSenhaUsuario(req.body.senha, { obrigatoria: true });
+    const { cargo } = validarCargoEquipe(req.body.cargo);
     const senhaHash = await bcrypt.hash(senha, 10);
     const id = await Registros.criarEquipe({ nome, email, senhaHash, cargo });
     res.status(201).json({
@@ -207,16 +203,16 @@ async function criarEquipe(req, res, next) {
       pessoa: montarPessoaEquipe(id, { nome, email, cargo }),
     });
   } catch (error) {
-    next(error);
+    next(normalizarErroEmailDuplicado(error));
   }
 }
 
 async function atualizarEquipe(req, res, next) {
   try {
-    const nome = formatarNome(validarTexto(req.body.nome, 'Nome'));
-    const email = formatarEmail(validarTexto(req.body.email, 'Email'));
-    const cargo = validarTexto(req.body.cargo, 'Cargo');
-    const senha = String(req.body.senha || '').trim();
+    const nome = validarNomeUsuario(req.body.nome);
+    const email = validarEmailUsuario(req.body.email);
+    const { cargo } = validarCargoEquipe(req.body.cargo);
+    const senha = validarSenhaUsuario(req.body.senha);
     const senhaHash = senha ? await bcrypt.hash(senha, 10) : null;
     await Registros.atualizarEquipe(req.params.id, {
       nome,
@@ -235,7 +231,7 @@ async function atualizarEquipe(req, res, next) {
       }),
     });
   } catch (error) {
-    next(error);
+    next(normalizarErroEmailDuplicado(error));
   }
 }
 
@@ -252,7 +248,6 @@ async function removerEquipe(req, res, next) {
 }
 
 module.exports = {
-  listarDados,
   listarTurmas,
   criarTurma,
   atualizarTurma,

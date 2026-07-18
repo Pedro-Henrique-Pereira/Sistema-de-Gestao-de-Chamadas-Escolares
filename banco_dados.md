@@ -105,6 +105,10 @@ CREATE TABLE IF NOT EXISTS chamadas_diarias (
   total_ausentes INT NOT NULL DEFAULT 0,
   atraso_processado BOOLEAN NOT NULL DEFAULT FALSE,
   status ENUM('pendente', 'confirmada', 'cancelada') NOT NULL DEFAULT 'pendente',
+  confirmada_por_id INT NULL,
+  confirmado_em DATETIME NULL,
+  bloqueada_em DATETIME NULL,
+  versao INT NOT NULL DEFAULT 1,
   chamada_ativa_key TINYINT
     GENERATED ALWAYS AS (
       CASE WHEN status <> 'cancelada' THEN 1 ELSE NULL END
@@ -125,6 +129,11 @@ CREATE TABLE IF NOT EXISTS chamadas_diarias (
   CONSTRAINT fk_chamadas_turma
     FOREIGN KEY (turma_id)
     REFERENCES turmas(id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_chamadas_confirmada_por
+    FOREIGN KEY (confirmada_por_id)
+    REFERENCES usuarios(id)
     ON DELETE SET NULL
     ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -190,6 +199,9 @@ CREATE TABLE IF NOT EXISTS registros_frequencia_alunos (
   atrasado BOOLEAN NOT NULL DEFAULT FALSE,
   horario_registro_atraso TIME NULL,
   atraso_registrado_em DATETIME NULL,
+  atraso_minutos INT NULL,
+  alterado_por_id INT NULL,
+  atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uk_freq_aluno_chamada (registro_chamada_id, aluno_id),
   KEY idx_freq_aluno_data (aluno_id, data_chamada),
@@ -217,6 +229,11 @@ CREATE TABLE IF NOT EXISTS registros_frequencia_alunos (
     FOREIGN KEY (turma_id)
     REFERENCES turmas(id)
     ON DELETE SET NULL
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_freq_alterado_por
+    FOREIGN KEY (alterado_por_id)
+    REFERENCES usuarios(id)
+    ON DELETE SET NULL
     ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -230,6 +247,7 @@ CREATE TABLE IF NOT EXISTS justificativas_frequencia (
   registrada_por_id INT NOT NULL,
   registrada_por_nome VARCHAR(100) NOT NULL,
   registrada_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_just_aluno (aluno_id),
   KEY idx_just_chamada (registro_chamada_id),
   KEY idx_jf_aluno_freq (aluno_id, frequencia_aluno_id),
@@ -255,6 +273,21 @@ CREATE TABLE IF NOT EXISTS justificativas_frequencia (
     REFERENCES usuarios(id)
     ON DELETE RESTRICT
     ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS chamada_auditoria (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  chamada_id INT NOT NULL,
+  usuario_id INT NULL,
+  usuario_perfil VARCHAR(30) NOT NULL,
+  evento ENUM('CHAMADA_CRIADA', 'CHAMADA_EDITADA_PELO_PROFESSOR', 'CHAMADA_EDITADA_PELA_PEDAGOGIA', 'ALUNO_MARCADO_COMO_ATRASADO', 'JUSTIFICATIVA_ADICIONADA', 'CHAMADA_CONFIRMADA', 'EDICAO_BLOQUEADA_POR_HORARIO') NOT NULL,
+  valores_anteriores JSON NULL,
+  valores_novos JSON NULL,
+  criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_chamada_auditoria_chamada_data (chamada_id, criado_em),
+  KEY idx_chamada_auditoria_usuario_data (usuario_id, criado_em),
+  CONSTRAINT fk_chamada_auditoria_chamada FOREIGN KEY (chamada_id) REFERENCES chamadas_diarias(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT fk_chamada_auditoria_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS configuracoes_escola (
@@ -490,8 +523,8 @@ WHERE data_envio < CURDATE();
 
 -- 11. Chamadas pendentes/canceladas antigas: preserva chamadas confirmadas ja migradas para historico.
 DELETE FROM chamadas_diarias
-WHERE data_chamada < CURDATE()
-  AND status IN ('pendente', 'cancelada', 'confirmada');
+WHERE data_chamada < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+  AND status = 'cancelada';
 
 -- 12. Fila de automacao finalizada antiga: dado operacional.
 DELETE FROM fila_automacao
@@ -533,14 +566,16 @@ ORDER BY TABLE_NAME, INDEX_NAME;
 
 EXPLAIN
 SELECT
-  COALESCE(SUM(CASE WHEN LOWER(COALESCE(rfa.status, '')) IN ('presente', 'atrasado') THEN 1 ELSE 0 END), 0) AS presentes,
-  COALESCE(SUM(CASE WHEN LOWER(COALESCE(rfa.status, '')) IN ('ausente', 'falta', 'faltou', 'justificado') THEN 1 ELSE 0 END), 0) AS ausentes,
-  COALESCE(SUM(CASE WHEN LOWER(COALESCE(rfa.status, '')) = 'justificado' THEN 1 ELSE 0 END), 0) AS justificados,
-  COALESCE(SUM(CASE WHEN (rfa.atrasado = TRUE OR LOWER(COALESCE(rfa.status, '')) = 'atrasado') THEN 1 ELSE 0 END), 0) AS atrasos,
+  COALESCE(SUM(CASE WHEN (COALESCE(rfa.atrasado, FALSE) = TRUE OR LOWER(COALESCE(rfa.status, '')) IN ('presente', 'atrasado')) THEN 1 ELSE 0 END), 0) AS presentes,
+  COALESCE(SUM(CASE WHEN NOT (COALESCE(rfa.atrasado, FALSE) = TRUE OR LOWER(COALESCE(rfa.status, '')) IN ('presente', 'atrasado')) AND LOWER(COALESCE(rfa.status, '')) IN ('ausente', 'falta', 'faltou', 'justificado') THEN 1 ELSE 0 END), 0) AS ausentes,
+  COALESCE(SUM(CASE WHEN NOT (COALESCE(rfa.atrasado, FALSE) = TRUE OR LOWER(COALESCE(rfa.status, '')) = 'atrasado') AND LOWER(COALESCE(rfa.status, '')) = 'justificado' THEN 1 ELSE 0 END), 0) AS justificados,
+  COALESCE(SUM(CASE WHEN (COALESCE(rfa.atrasado, FALSE) = TRUE OR LOWER(COALESCE(rfa.status, '')) = 'atrasado') THEN 1 ELSE 0 END), 0) AS atrasos,
   COUNT(DISTINCT rfa.registro_chamada_id) AS chamadas
 FROM registros_frequencia_alunos rfa
 WHERE rfa.data_chamada >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
   AND rfa.data_chamada < DATE_ADD(CURDATE(), INTERVAL 1 DAY);
+
+Regra dos indicadores: faltas justificadas são uma subcategoria das ausências e alunos atrasados são uma subcategoria das presenças. Portanto, o total geral é `presentes + ausentes`; justificativas e atrasos não devem ser somados novamente.
 
 EXPLAIN
 SELECT id, professor_id, professor_nome, turma_id, turma_nome, materia,

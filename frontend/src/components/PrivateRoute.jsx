@@ -1,39 +1,15 @@
-import { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { getUsuarioLogado } from "../services/authService";
+import { useAuth } from "../context/AuthContext";
+import { resolverAcessoProtegido } from "../utils/authRouting";
+import AuthState from "./AuthState";
 
 function PrivateRoute({ children, cargosPermitidos }) {
-  const [usuario, setUsuario] = useState(null);
-  const [carregando, setCarregando] = useState(true);
+  const { usuario, carregando, erro, validarSessao } = useAuth();
+  const acesso = resolverAcessoProtegido({ carregando, erro, usuario, cargosPermitidos });
 
-  useEffect(() => {
-    async function verificarLogin() {
-      try {
-        const data = await getUsuarioLogado();
-
-        if (cargosPermitidos && !cargosPermitidos.includes(data.usuario.tipo)) {
-          setUsuario(false);
-          return;
-        }
-
-        setUsuario(data.usuario);
-      } catch {
-        setUsuario(false);
-      } finally {
-        setCarregando(false);
-      }
-    }
-
-    verificarLogin();
-  }, [cargosPermitidos]);
-
-  if (carregando) {
-    return <p>Carregando...</p>;
-  }
-
-  if (!usuario) {
-    return <Navigate to="/login" replace />;
-  }
+  if (acesso.estado === "carregando") return <AuthState />;
+  if (acesso.estado === "erro") return <AuthState tipo="erro" onRetry={validarSessao} />;
+  if (acesso.destino) return <Navigate to={acesso.destino} replace />;
 
   return children;
 }

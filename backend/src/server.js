@@ -37,18 +37,21 @@ const configuracoesEscolaRoutes = require("./routes/configuracoes-escola.routes"
 const mensagensRoutes = require("./routes/mensagens.routes");
 const automacaoRoutes = require("./routes/automacao.routes");
 const { csrfProtection } = require("./middlewares/csrfMiddleware");
-const { errorMiddleware } = require("./utils/errorHandler");
+const { securityHeaders } = require("./middlewares/securityHeaders");
+const { errorMiddleware, notFoundMiddleware } = require("./utils/errorHandler");
 const { iniciarRotinaLimpezaDiaria } = require("./services/limpezaDadosService");
 const { iniciarRotinaLimpezaAutomacao } = require("./services/limpezaAutomacaoService");
 
 const app = express();
+app.disable("x-powered-by");
 
 if (process.env.NODE_ENV === "production") {
   const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 1);
   app.set("trust proxy", trustProxyHops);
 }
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://192.168.0.13:5173";
+const FRONTEND_URL = process.env.FRONTEND_URL
+  || (process.env.NODE_ENV === "production" ? "" : "http://192.168.0.13:5173");
 
 const FRONTEND_URLS_EXTRAS = String(process.env.FRONTEND_URLS_EXTRAS || "")
   .split(",")
@@ -60,47 +63,41 @@ const origensPermitidas = new Set([
   "https://www.lysimaco.com.br",
   "https://lysimaco.com.br",
   "https://sistema-de-gestao-de-chamadas-escol.vercel.app",
-  "http://192.168.0.13:5173",
-  "http://192.168.0.13:4173",
-  "http://localhost:5173",
-  "http://localhost:4173",
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:4173",
-  "http://192.168.0.22:5173",
-  "http://192.168.0.22:4173",
   ...FRONTEND_URLS_EXTRAS,
-]);
+  ...(process.env.NODE_ENV === "production"
+    ? []
+    : [
+        "http://localhost:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:4173",
+      ]),
+].filter(Boolean));
 
-function origemRedeLocalPermitida(origin = "") {
-  return /^http:\/\/192\.168\.0\.\d{1,3}:(5173|4173)$/.test(origin);
-}
-
-function origemVercelPermitida(origin = "") {
-  return (
-    process.env.ALLOW_VERCEL_PREVIEWS === "true" &&
-    /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)
-  );
-}
+app.use(securityHeaders);
 
 app.use(
   cors({
     origin(origin, callback) {
       if (
         !origin ||
-        origensPermitidas.has(origin) ||
-        origemRedeLocalPermitida(origin) ||
-        origemVercelPermitida(origin)
+        origensPermitidas.has(origin)
       ) {
         return callback(null, true);
       }
 
-      return callback(new Error(`Origem não autorizada pelo CORS: ${origin}`));
+      const error = new Error("Origem não autorizada pelo CORS.");
+      error.status = 403;
+      return callback(error);
     },
     credentials: true,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "X-CSRF-Token"],
+    maxAge: 600,
   })
 );
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "512kb", type: "application/json" }));
 app.use(cookieParser());
 app.use(csrfProtection);
 
@@ -122,6 +119,7 @@ app.get("/", (req, res) => {
   });
 });
 
+app.use(notFoundMiddleware);
 app.use(errorMiddleware);
 
 const PORT = Number(process.env.PORT || 3001);

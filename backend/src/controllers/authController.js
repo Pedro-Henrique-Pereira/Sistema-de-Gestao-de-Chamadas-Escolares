@@ -4,50 +4,13 @@ const crypto = require("crypto");
 const Usuario = require("../models/usuarioModel");
 const db = require("../database/connection");
 const { formatarEmail } = require("../utils/formatadores");
-const { emitirCsrfToken, cookieOptions: csrfCookieOptions } = require("../middlewares/csrfMiddleware");
-
-function tokenCookieOptions() {
-  const isProduction = process.env.NODE_ENV === "production";
-
-  return {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "strict",
-    path: "/",
-  };
-}
-
-function valorHostEhLocalhost(valor) {
-  if (!valor) return false;
-
-  const texto = String(valor).trim().toLowerCase();
-
-  if (!texto) return false;
-
-  try {
-    const url = texto.includes("://") ? new URL(texto) : new URL(`http://${texto}`);
-    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
-  } catch {
-    const hostSemPorta = texto
-      .split(",")[0]
-      .replace(/^\[/, "")
-      .replace(/\]$/, "")
-      .split(":")[0];
-
-    return ["localhost", "127.0.0.1", "::1"].includes(hostSemPorta);
-  }
-}
-
-function requisicaoVeioDeLocalhost(req) {
-  const origin = req.get("origin");
-  const referer = req.get("referer");
-  const host = req.get("host");
-
-  if (origin && !valorHostEhLocalhost(origin)) return false;
-  if (referer && !valorHostEhLocalhost(referer)) return false;
-
-  return valorHostEhLocalhost(host) || valorHostEhLocalhost(req.hostname);
-}
+const { emitirCsrfToken } = require("../middlewares/csrfMiddleware");
+const {
+  tokenCookieOptions,
+  limparCookiesAutenticacao,
+} = require("../utils/authCookies");
+const { requisicaoVeioDeLocalhost } = require("../utils/devAccess");
+const { serializarUsuarioPublico } = require("../utils/publicDtos");
 
 function modoDevHabilitado(req) {
   return (
@@ -112,7 +75,11 @@ async function respostaLoginComCookie(req, res, usuario, mensagem = "Login reali
   const expiraEm = calcularExpiracaoSessao();
   const token = gerarToken(usuario, tokenId);
 
-  await registrarSessaoAtiva(usuario.id, tokenId, req.get("user-agent"), expiraEm);
+  const dispositivoInfo = String(req.get("user-agent") || "")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .slice(0, 255);
+
+  await registrarSessaoAtiva(usuario.id, tokenId, dispositivoInfo, expiraEm);
 
   res.cookie("token", token, tokenCookieOptions());
 
@@ -121,12 +88,7 @@ async function respostaLoginComCookie(req, res, usuario, mensagem = "Login reali
   return res.status(200).json({
     mensagem,
     csrfToken,
-    usuario: {
-      id: usuario.id,
-      nome: usuario.nome,
-      email: usuario.email,
-      tipo: usuario.tipo,
-    },
+    usuario: serializarUsuarioPublico(usuario),
   });
 }
 
@@ -146,10 +108,11 @@ function gerarToken(usuario, tokenId) {
 
 async function login(req, res, next) {
   try {
-    const { senha } = req.body;
-    const email = formatarEmail(req.body.email);
+    const corpo = req.body || {};
+    const senha = typeof corpo.senha === "string" ? corpo.senha : "";
+    const email = formatarEmail(corpo.email);
 
-    if (!email || !senha) {
+    if (!email || !senha || senha.length > 128) {
       return res.status(400).json({
         erro: "Email e senha são obrigatórios.",
       });
@@ -163,13 +126,9 @@ async function login(req, res, next) {
       });
     }
 
-    if (!usuario.ativo) {
-      return res.status(403).json({
-        erro: "Usuário desativado.",
-      });
-    }
-
-    const senhaValida = await bcrypt.compare(senha, usuario.senha_hash);
+    const senhaValida = usuario.ativo
+      ? await bcrypt.compare(senha, usuario.senha_hash)
+      : false;
 
     if (!senhaValida) {
       return res.status(401).json({
@@ -208,8 +167,9 @@ async function devLogin(req, res, next) {
       return res.status(404).json({ erro: "Login rápido indisponível." });
     }
 
-    const id = Number(req.body.id || req.body.usuarioId);
-    const email = req.body.email ? formatarEmail(req.body.email) : "";
+    const corpo = req.body || {};
+    const id = Number(corpo.id || corpo.usuarioId);
+    const email = corpo.email ? formatarEmail(corpo.email) : "";
 
     if (!id && !email) {
       return res.status(400).json({ erro: "Informe o id ou email do usuário para teste." });
@@ -245,7 +205,7 @@ async function me(req, res, next) {
     }
 
     return res.status(200).json({
-      usuario,
+      usuario: serializarUsuarioPublico(usuario),
     });
   } catch (error) {
     return next(error);
@@ -261,8 +221,7 @@ async function logout(req, res, next) {
       );
     }
 
-    res.clearCookie("token", tokenCookieOptions());
-    res.clearCookie("csrfToken", csrfCookieOptions());
+    limparCookiesAutenticacao(res);
 
     return res.status(200).json({
       mensagem: "Logout realizado com sucesso.",

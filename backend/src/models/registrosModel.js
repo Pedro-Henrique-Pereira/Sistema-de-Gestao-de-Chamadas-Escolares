@@ -1,12 +1,5 @@
 const db = require('../database/connection');
-
-function normalizarCargoParaTipo(cargo) {
-  const valor = String(cargo || '').toLowerCase();
-  if (valor.includes('admin')) return 'administracao';
-  if (valor.includes('pedag')) return 'pedagoga';
-  if (valor.includes('prof')) return 'professor';
-  return valor;
-}
+const { normalizarCargoParaTipo } = require('../utils/usuarioValidation');
 
 function normalizarTipoParaCargo(tipo) {
   if (tipo === 'administracao') return 'Administrador';
@@ -120,21 +113,6 @@ function agruparAlunosComResponsaveis(rows) {
   });
 
   return Array.from(mapa.values());
-}
-
-async function listarAlunos() {
-  const [rows] = await db.execute(`
-    SELECT
-      a.id, a.nome, a.idade, a.turma_id, t.nome AS turma,
-      r.id AS responsavel_id, r.nome AS responsavel_nome,
-      r.parentesco AS responsavel_parentesco, r.contato AS responsavel_contato
-    FROM alunos a
-    LEFT JOIN turmas t ON t.id = a.turma_id
-    LEFT JOIN responsaveis r ON r.aluno_id = a.id
-    ORDER BY t.nome IS NULL, t.nome ASC, a.nome ASC
-  `);
-
-  return agruparAlunosComResponsaveis(rows);
 }
 
 async function listarAlunosPaginado({ page = 1, limit = 50, busca = '' } = {}) {
@@ -320,7 +298,13 @@ async function atualizarTurmaAluno(id, turmaNome) {
 }
 
 async function removerAluno(id) {
-  await db.execute('DELETE FROM alunos WHERE id = ?', [id]);
+  const [result] = await db.execute('DELETE FROM alunos WHERE id = ?', [id]);
+
+  if (result.affectedRows === 0) {
+    const erro = new Error('Aluno não encontrado.');
+    erro.status = 404;
+    throw erro;
+  }
 }
 
 async function listarEquipe() {
@@ -336,7 +320,6 @@ async function listarEquipe() {
     idade: '',
     cargo: normalizarTipoParaCargo(usuario.tipo),
     email: usuario.email,
-    senha: '',
     status: usuario.ativo ? 'Ativo' : 'Inativo',
   }));
 }
@@ -385,7 +368,13 @@ async function atualizarEquipe(id, { nome, email, senhaHash, cargo, status }) {
 }
 
 async function removerEquipe(id) {
-  await db.execute('DELETE FROM usuarios WHERE id = ?', [id]);
+  const [result] = await db.execute('DELETE FROM usuarios WHERE id = ?', [id]);
+
+  if (result.affectedRows === 0) {
+    const erro = new Error('Conta não encontrada.');
+    erro.status = 404;
+    throw erro;
+  }
 }
 
 module.exports = {
@@ -393,7 +382,6 @@ module.exports = {
   criarTurma,
   atualizarTurma,
   removerTurma,
-  listarAlunos,
   listarAlunosPaginado,
   criarAluno,
   atualizarAluno,

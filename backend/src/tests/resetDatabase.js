@@ -77,8 +77,7 @@ async function resetDatabase() {
       await connection.query("SET FOREIGN_KEY_CHECKS = 1");
     } catch (_) {}
 
-    console.error("❌ Erro ao resetar banco:");
-    console.error(error);
+    console.error(`Erro ao resetar banco. code=${error.code || "DB_RESET_ERROR"}`);
   } finally {
     connection.release();
     await pool.end();

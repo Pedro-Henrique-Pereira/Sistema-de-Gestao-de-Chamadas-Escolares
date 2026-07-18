@@ -19,24 +19,6 @@ function printTitle(title) {
   console.log("=".repeat(80));
 }
 
-function safeJson(value) {
-  if (!value) return value;
-
-  if (typeof value === "object") {
-    return JSON.stringify(value, null, 2);
-  }
-
-  if (typeof value === "string") {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
-  }
-
-  return value;
-}
-
 async function showTable(connection, table) {
   printTitle(`TABELA: ${table}`);
 
@@ -44,32 +26,8 @@ async function showTable(connection, table) {
     const [countRows] = await connection.query(`SELECT COUNT(*) AS total FROM \`${table}\``);
     console.log(`Total de registros: ${countRows[0].total}`);
 
-    const [rows] = await connection.query(`SELECT * FROM \`${table}\` ORDER BY id DESC LIMIT 100`);
-
-    if (rows.length === 0) {
-      console.log("Nenhum dado encontrado.");
-      return;
-    }
-
-    const formattedRows = rows.map((row) => {
-      const formatted = {};
-
-      for (const [key, value] of Object.entries(row)) {
-        if (key === "senha_hash") {
-          formatted[key] = "[OCULTO POR SEGURANÇA]";
-        } else if (key === "alunos" || key === "anexos") {
-          formatted[key] = safeJson(value);
-        } else {
-          formatted[key] = value;
-        }
-      }
-
-      return formatted;
-    });
-
-    console.table(formattedRows);
   } catch (error) {
-    console.error(`Erro ao consultar tabela ${table}:`, error.message);
+    console.error(`Erro ao contar tabela ${table}. code=${error.code || "DB_COUNT_ERROR"}`);
   }
 }
 
@@ -85,70 +43,15 @@ async function main() {
       port: Number(process.env.DB_PORT || 3306),
     });
 
-    printTitle("VISUALIZAÇÃO ORGANIZADA DO BANCO DE DADOS");
-    console.log(`Banco: ${process.env.DB_NAME || "Sistema_Chamada"}`);
+    printTitle("RESUMO SANITIZADO DO BANCO DE DADOS");
 
     for (const table of TABLES) {
       await showTable(connection, table);
     }
 
-    printTitle("CONSULTAS RELACIONADAS");
-
-    const [alunosComTurma] = await connection.query(`
-      SELECT 
-        a.id,
-        a.nome AS aluno,
-        a.idade,
-        COALESCE(t.nome, 'Sem turma') AS turma,
-        a.criado_em
-      FROM alunos a
-      LEFT JOIN turmas t ON t.id = a.turma_id
-      ORDER BY t.nome, a.nome
-      LIMIT 200
-    `);
-
-    console.log("\nAlunos com suas turmas:");
-    console.table(alunosComTurma);
-
-    const [responsaveisAlunos] = await connection.query(`
-      SELECT
-        r.id,
-        a.nome AS aluno,
-        r.nome AS responsavel,
-        r.parentesco,
-        r.contato
-      FROM responsaveis r
-      INNER JOIN alunos a ON a.id = r.aluno_id
-      ORDER BY a.nome, r.nome
-      LIMIT 200
-    `);
-
-    console.log("\nResponsáveis por aluno:");
-    console.table(responsaveisAlunos);
-
-    const [frequenciaDetalhada] = await connection.query(`
-      SELECT
-        f.id,
-        f.data_chamada,
-        f.aluno_nome,
-        f.turma_nome,
-        f.materia,
-        f.status,
-        f.atrasado,
-        f.horario_registro_atraso,
-        f.atraso_registrado_em
-      FROM registros_frequencia_alunos f
-      ORDER BY f.data_chamada DESC, f.turma_nome, f.aluno_nome
-      LIMIT 200
-    `);
-
-    console.log("\nFrequência detalhada dos alunos:");
-    console.table(frequenciaDetalhada);
-
     printTitle("FIM DA CONSULTA");
   } catch (error) {
-    console.error("Erro geral ao conectar ou consultar o banco:");
-    console.error(error.message);
+    console.error(`Erro ao gerar resumo do banco. code=${error.code || "DB_SUMMARY_ERROR"}`);
   } finally {
     if (connection) {
       await connection.end();

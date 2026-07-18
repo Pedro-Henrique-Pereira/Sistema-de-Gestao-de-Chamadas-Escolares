@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-const API = "http://localhost:3000/api/auth/login";
+const API = process.env.TEST_API_LOGIN_URL || "http://localhost:3001/api/auth/login";
 
 async function testarSqlInjection() {
   const payloads = [
@@ -19,8 +19,6 @@ async function testarSqlInjection() {
 
       console.log("Payload:", payload);
       console.log("Status:", resposta.status);
-      console.log("Resposta:", resposta.data);
-
       if (resposta.data?.token || resposta.data?.usuario) {
         console.log("⚠️ POSSÍVEL VULNERABILIDADE");
       } else {

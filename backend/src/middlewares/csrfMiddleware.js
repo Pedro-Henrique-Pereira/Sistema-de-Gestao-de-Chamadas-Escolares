@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { csrfCookieOptions } = require("../utils/authCookies");
 
 const CSRF_COOKIE_NAME = "csrfToken";
 const CSRF_HEADER_NAME = "x-csrf-token";
@@ -9,14 +10,7 @@ function gerarCsrfToken() {
 }
 
 function cookieOptions() {
-  const isProduction = process.env.NODE_ENV === "production";
-
-  return {
-    httpOnly: false,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "strict",
-    path: "/",
-  };
+  return csrfCookieOptions();
 }
 
 function emitirCsrfToken(req, res) {
@@ -47,11 +41,21 @@ function csrfProtection(req, res, next) {
   const tokenCookie = req.cookies?.[CSRF_COOKIE_NAME];
   const tokenHeader = req.get(CSRF_HEADER_NAME);
 
-  if (!tokenCookie || !tokenHeader || tokenCookie !== tokenHeader) {
+  if (!tokensCoincidem(tokenCookie, tokenHeader)) {
     return res.status(403).json({ erro: "Requisição bloqueada por proteção CSRF." });
   }
 
   return next();
+}
+
+function tokensCoincidem(tokenCookie, tokenHeader) {
+  if (!tokenCookie || !tokenHeader) return false;
+
+  const cookieBuffer = Buffer.from(String(tokenCookie));
+  const headerBuffer = Buffer.from(String(tokenHeader));
+  if (cookieBuffer.length !== headerBuffer.length) return false;
+
+  return crypto.timingSafeEqual(cookieBuffer, headerBuffer);
 }
 
 module.exports = {
@@ -60,4 +64,5 @@ module.exports = {
   getCsrfToken,
   csrfProtection,
   cookieOptions,
+  tokensCoincidem,
 };

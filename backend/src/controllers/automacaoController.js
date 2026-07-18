@@ -1,6 +1,5 @@
 const db = require('../database/db');
-
-const ERRO_PUBLICO_ROBO = 'Falha no disparo. Verifique a máquina local ou o status do WhatsApp Web.';
+const { serializarStatusAutomacao } = require('../utils/publicDtos');
 
 function validarIdAutomacao(valor) {
   const id = Number(valor);
@@ -12,24 +11,6 @@ function validarIdAutomacao(valor) {
   return id;
 }
 
-function sanitizarAutomacao(row) {
-  if (!row) return row;
-
-  const { erro, ...automacao } = row;
-
-  if (row.status === 'erro' && erro) {
-    automacao.erro_publico = ERRO_PUBLICO_ROBO;
-  } else if (row.status === 'expirado') {
-    automacao.erro_publico = 'A automação expirou antes de ser concluída. Verifique a máquina local.';
-  } else if (row.status === 'cancelado') {
-    automacao.erro_publico = 'Solicitação cancelada antes do início da execução.';
-  } else {
-    automacao.erro_publico = null;
-  }
-
-  return automacao;
-}
-
 async function consultarStatus(req, res, next) {
   try {
     const id = validarIdAutomacao(req.params.id);
@@ -38,17 +19,7 @@ async function consultarStatus(req, res, next) {
       `
       SELECT
         id,
-        usuario_solicitante_id,
-        usuario_solicitante_nome,
-        maquina_destino,
-        tipo_automacao,
         status,
-        lock_owner,
-        lock_adquirido_em,
-        data_solicitacao,
-        iniciado_em,
-        concluido_em,
-        tentativas,
         erro
       FROM fila_automacao
       WHERE id = ?
@@ -64,7 +35,7 @@ async function consultarStatus(req, res, next) {
       throw erro;
     }
 
-    return res.json({ automacao: sanitizarAutomacao(rows[0]) });
+    return res.json({ automacao: serializarStatusAutomacao(rows[0]) });
   } catch (error) {
     return next(error);
   }

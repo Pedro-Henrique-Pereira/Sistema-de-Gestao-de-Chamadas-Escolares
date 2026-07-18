@@ -54,6 +54,8 @@ async function obterConfiguracao(req, res, next) {
       tempo_maximo_justificativas_meses: Number(config.tempo_maximo_justificativas_meses || 1),
       tempoMaximoJustificativasMeses: Number(config.tempo_maximo_justificativas_meses || 1),
       atraso_liberado: horarioParaMinutos(servidor) <= horarioParaMinutos(limite),
+      automacao_liberada: horarioParaMinutos(servidor) > horarioParaMinutos(limite),
+      horario_maximo_chegada_passou: horarioParaMinutos(servidor) > horarioParaMinutos(limite),
     });
   } catch (error) {
     return next(error);

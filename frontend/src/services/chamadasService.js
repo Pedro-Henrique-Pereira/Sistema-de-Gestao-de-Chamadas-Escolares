@@ -30,9 +30,9 @@ export function atualizarChamada(id, dados) {
   });
 }
 
-export function marcarAlunoAtrasado(chamadaId, alunoId) {
+export function marcarAlunoAtrasado(chamadaId, alunoId, versao) {
   return apiFetch(`/api/chamadas/${chamadaId}/atraso`, {
     method: "PATCH",
-    body: JSON.stringify({ aluno_id: alunoId }),
+    body: JSON.stringify({ aluno_id: alunoId, versao }),
   });
 }

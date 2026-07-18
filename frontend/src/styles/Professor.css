@@ -81,3 +81,15 @@ button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 @media (max-width: 640px) { .professor-header { padding-left: 12px; padding-right: 12px; } .professor-user-info h1 { max-width: 44vw; } .aluno-linha { flex-direction: column; align-items: stretch; } .presenca-toggle { width: 100%; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); } .status-button { width: 100%; min-width: 0; } .historico-card, .historico-aluno-row { grid-template-columns: 1fr; align-items: stretch; } .historico-actions { justify-content: stretch; } .editar-chamada-button { width: 100%; } }
 @media (max-width: 380px) { .professor-content { padding-left: 10px; padding-right: 10px; } .professor-avatar, .config-button, .logout-button { min-height: 44px; } .logout-button { padding: 0 10px; font-size: .86rem; } }
 @media (min-width: 768px) { .professor-page { max-width: 980px; margin: 0 auto; border-left: 1px solid var(--prof-border); border-right: 1px solid var(--prof-border); } .professor-header, .professor-content { padding-left: 24px; padding-right: 24px; } .salvar-area { max-width: 980px; margin: 0 auto; padding-left: 24px; padding-right: 24px; } .config-modal { max-width: 520px; margin: 0 auto; border-radius: 24px 24px 0 0; } }
+
+.call-flow-badge {
+  width: fit-content;
+  margin-top: 8px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: .72rem !important;
+  font-weight: 900;
+  letter-spacing: .02em;
+}
+.call-flow-badge.temporary { background: #fff4d6; color: #8a5b00; }
+.call-flow-badge.confirmed { background: var(--prof-green-soft); color: var(--prof-green); }

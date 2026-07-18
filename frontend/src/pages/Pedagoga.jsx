@@ -4,11 +4,16 @@ import api from "../services/api";
 import { pedagogaService } from "../services/pedagogaService";
 import AutomacaoFeedbackModal from "../components/AutomacaoFeedbackModal";
 import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
+import TurmasDashboardCard from "../components/TurmasDashboardCard";
 import { buscarConfiguracaoEscola } from "../services/configuracoesEscolaService";
+import { ATRASOS_CACHE_NAMESPACE } from "../utils/atrasosSync";
 import RelatoriosAvancados from "./RelatoriosAvancados";
 import "../styles/Admin.css";
 import "../styles/Pedagoga.css";
 import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
+import { useAuth } from "../context/AuthContext";
+import { resumirStatusFrequencia } from "../utils/frequenciaMetricas";
+import { registrarErroCliente } from "../utils/clientLogger";
 
 const hojeISO = () => dataBrasiliaISO();
 const MIN_CARACTERES_BUSCA_RESPONSAVEIS = 2;
@@ -52,6 +57,7 @@ function pontuarBuscaResponsavel(responsavel, termo) {
 }
 
 function Pedagoga() {
+  const { usuario, sair: encerrarSessao } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activePage, setActivePage] = useState("dashboard");
   const [abaPainel, setAbaPainel] = useState("geral");
@@ -83,6 +89,7 @@ function Pedagoga() {
   });
   const [mensagem, setMensagem] = useState("");
   const [configAtraso, setConfigAtraso] = useState({ horarioLimiteAtraso: "07:45", atrasoLiberado: false, horarioServidor: "" });
+  const [automacaoLiberada, setAutomacaoLiberada] = useState(false);
   const [mensagemWhatsappTexto, setMensagemWhatsappTexto] = useState("");
   const [mensagemWhatsappModalAberto, setMensagemWhatsappModalAberto] = useState(false);
   const [maquinaPadraoChamadas, setMaquinaPadraoChamadas] = useState("");
@@ -119,19 +126,6 @@ function Pedagoga() {
     { id: "configuracoes", label: "Configurações" },
   ];
 
-  async function carregarUsuarioLogado() {
-    const { data } = await api.get("/api/auth/me");
-    const usuario = data?.usuario;
-
-    if (!usuario || !["pedagoga", "administracao"].includes(usuario.tipo)) {
-      window.location.href = "/login";
-      return;
-    }
-
-    setUsuarioLogado(usuario);
-    setConfigForm({ nome: usuario.nome || "", email: usuario.email || "", senha: "" });
-  }
-
   async function carregarDashboard() {
     const { data } = await pedagogaService.dashboard();
     setDashboard((dashboardAtual) => ({
@@ -160,6 +154,7 @@ function Pedagoga() {
     ]);
     setChamadas(chamadasData.chamadas || []);
     setChamadasConfirmadas(confirmadasData.chamadas || []);
+    setAutomacaoLiberada(Boolean(confirmadasData.automacao_liberada));
     setTurmasPendentes(turmasData.turmas || []);
   }
 
@@ -178,8 +173,10 @@ function Pedagoga() {
       return cacheResponsaveis[chaveCache].responsaveis || [];
     }
 
-    const { data } = await api.get("/api/pedagoga/responsaveis", {
-      params: { page, limit: 50, busca: termo },
+    const { data } = await api.post("/api/pedagoga/responsaveis/pesquisar", {
+      page,
+      limit: 50,
+      busca: termo,
     });
     const lista = data.responsaveis || data.dados || [];
     const meta = {
@@ -211,6 +208,7 @@ function Pedagoga() {
       atrasoLiberado: Boolean(data.atraso_liberado),
       horarioServidor: String(data.horario_servidor || "").slice(0, 5),
     });
+    setAutomacaoLiberada(Boolean(data.automacao_liberada));
   }
 
   async function carregarMensagemWhatsapp() {
@@ -246,8 +244,9 @@ function Pedagoga() {
   async function carregarDadosIniciais() {
     try {
       setLoading(true);
+      setUsuarioLogado(usuario);
+      setConfigForm({ nome: usuario?.nome || "", email: usuario?.email || "", senha: "" });
       await Promise.all([
-        carregarUsuarioLogado(),
         carregarDashboard(),
         carregarConfiguracaoAtraso(),
         carregarPreferenciasPedagoga(),
@@ -257,7 +256,7 @@ function Pedagoga() {
       cacheRef.current.configAtrasoCarregada = true;
       cacheRef.current.preferenciasCarregadas = true;
     } catch (error) {
-      window.location.href = "/login";
+      setMensagem(error.message || "Não foi possível carregar todos os dados iniciais.");
     } finally {
       setLoading(false);
     }
@@ -306,7 +305,7 @@ function Pedagoga() {
         cache.filtrosCarregados = true;
       }
     } catch (error) {
-      console.error(error);
+      registrarErroCliente("pedagoga.carregarAba", error);
       setMensagem(error.message || "Erro ao carregar os dados desta aba.");
     } finally {
       requisicoesEmAndamentoRef.current[pagina] = false;
@@ -442,6 +441,7 @@ function Pedagoga() {
         nome: chamadaEditando.turma_nome,
         materia: chamadaEditando.materia,
         alunos: (chamadaEditando.alunos || []).map((aluno) => ({
+          ...aluno,
           id: aluno.aluno_id || aluno.alunoId || aluno.id,
           nome: aluno.nome,
         })),
@@ -462,12 +462,16 @@ function Pedagoga() {
     setActivePage(pagina);
     setSidebarOpen(false);
     setMensagem("");
-    carregarAbaSobDemanda(pagina).catch(console.error);
+    carregarAbaSobDemanda(pagina)
+      .catch((error) => registrarErroCliente("pedagoga.carregarSobDemanda", error));
   }
 
   async function logout() {
-    await api.post("/api/auth/logout");
-    window.location.href = "/login";
+    try {
+      await encerrarSessao();
+    } catch {
+      // O contexto remove o estado local mesmo se o servidor já tiver encerrado a sessão.
+    }
   }
 
   function rolarParaElemento(refs, chave) {
@@ -503,30 +507,21 @@ function Pedagoga() {
     const chave = `${chamadaId}-${alunoId}`;
     const status = normalizarStatus(aluno);
     if (aluno.atrasado) return "Atrasado";
-    if (status.includes("justific") || justificativas[chave]?.trim()) return "Falta Justificada";
+    if (status.includes("justific") || justificativas[chave]?.trim() || String(aluno.motivo || "").trim()) return "Falta Justificada";
     if (status === "presente") return "Presente";
     return "Ausente";
   }
 
   function getResumoChamada(chamada) {
-    return (chamada.alunos || []).reduce(
-      (acc, aluno) => {
-        const status = getStatusFinal(chamada.id, aluno);
-        if (status === "Presente" || status === "Atrasado") acc.presentes += 1;
-        else if (status === "Falta Justificada") acc.justificadas += 1;
-        else acc.faltas += 1;
-        if (status === "Atrasado") acc.atrasos = (acc.atrasos || 0) + 1;
-        acc.total += 1;
-        return acc;
-      },
-      { total: 0, presentes: 0, faltas: 0, justificadas: 0, atrasos: 0 }
-    );
+    const statusAlunos = (chamada.alunos || []).map((aluno) => getStatusFinal(chamada.id, aluno));
+    return resumirStatusFrequencia(statusAlunos);
   }
 
 
   function montarPayloadConfirmacao(chamada) {
     return {
       maquinaDestino: maquinaPadraoChamadas,
+      versao: chamada.versao,
       alunos: (chamada.alunos || []).map((aluno) => {
         const alunoId = aluno.aluno_id || aluno.id;
         const chave = `${chamada.id}-${alunoId}`;
@@ -536,7 +531,7 @@ function Pedagoga() {
           aluno_id: alunoId,
           nome: aluno.nome,
           status: statusFinal === "Presente" || statusFinal === "Atrasado" ? "presente" : statusFinal === "Falta Justificada" ? "justificado" : "ausente",
-          motivo: justificativas[chave] || "",
+          motivo: justificativas[chave] || aluno.motivo || "",
           atrasado: statusFinal === "Atrasado",
           horario_registro_atraso: statusFinal === "Atrasado" ? (aluno.horario_registro_atraso || aluno.horarioRegistroAtraso || "") : "",
           atraso_registrado_em: statusFinal === "Atrasado" ? (aluno.atraso_registrado_em || aluno.atrasoRegistradoEm || "") : "",
@@ -567,6 +562,25 @@ function Pedagoga() {
       setJustificativasAbertas({});
       await Promise.all([carregarDashboard(), carregarChamadas()]);
       cacheRef.current.dashboardCarregado = true;
+      cacheRef.current.chamadasCarregadas = true;
+    } catch (error) {
+      setMensagem(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function salvarRevisaoTemporaria(chamada) {
+    try {
+      setLoading(true);
+      const payload = montarPayloadConfirmacao(chamada);
+      await pedagogaService.atualizarChamadaTemporaria(chamada.id, {
+        materia: chamada.materia,
+        alunos: payload.alunos,
+        versao: chamada.versao,
+      });
+      setMensagem("Revisão temporária salva. O professor verá a versão atualizada.");
+      await carregarChamadas();
       cacheRef.current.chamadasCarregadas = true;
     } catch (error) {
       setMensagem(error.message);
@@ -644,6 +658,7 @@ function Pedagoga() {
         status: atrasado ? "presente" : novoStatus,
         motivo,
         atrasado,
+        versao: chamadaConfirmadaEditando.versao_chamada,
       });
 
       const { data } = await pedagogaService.detalharChamadaConfirmada(chamadaConfirmadaEditando.id);
@@ -677,7 +692,7 @@ function Pedagoga() {
         setMensagem(`Atrasos só podem ser marcados até ${configAtual.horarioLimiteAtraso}. Depois desse horário permanece como falta.`);
         return;
       }
-      await pedagogaService.marcarAlunoAtrasado(chamada.id, alunoId);
+      await pedagogaService.marcarAlunoAtrasado(chamada.id, alunoId, chamada.versao);
       setMensagem("Atraso registrado com sucesso.");
       await Promise.all([carregarDashboard(), carregarChamadas(), carregarConfiguracaoAtraso()]);
       cacheRef.current.dashboardCarregado = true;
@@ -769,6 +784,7 @@ function Pedagoga() {
           turma_id: turmaSelecionada.id,
           materia: chamadaEditando.materia || "Chamada Pedagógica",
           alunos,
+          versao: chamadaEditando.versao,
         });
       } else {
         await pedagogaService.criarChamadaPedagogica({
@@ -819,6 +835,12 @@ function Pedagoga() {
       const payload = { nome: configForm.nome, email: configForm.email };
       if (configForm.senha.trim()) payload.senha = configForm.senha;
       const { data } = await api.put("/api/usuarios/configurar", payload);
+      if (data.sessaoEncerrada) {
+        alert("Senha atualizada. Entre novamente para continuar.");
+        await encerrarSessao();
+        return;
+      }
+
       setUsuarioLogado(data.usuario);
       setConfigForm({ nome: data.usuario.nome, email: data.usuario.email, senha: "" });
       setMensagem("Perfil atualizado com sucesso.");
@@ -902,32 +924,16 @@ function Pedagoga() {
                 <div className="cards-grid">
                   <div className="summary-card"><span className="card-icon">CH</span><div><h3>{dashboard?.resumo?.chamadasHoje || 0}</h3><p>Chamadas hoje</p></div></div>
                   <div className="summary-card"><span className="card-icon">FT</span><div><h3>{dashboard?.resumo?.totalFaltas || 0}</h3><p>Faltas do dia</p></div></div>
-                  <div className="summary-card"><span className="card-icon">JF</span><div><h3>{dashboard?.resumo?.totalJustificadas || 0}</h3><p>Faltas justificadas</p></div></div>
-                  <div className="summary-card delay-card"><span className="card-icon">AT</span><div><h3>{dashboard?.resumo?.totalAtrasos || 0}</h3><p>Atrasos do dia</p><small>Horário máximo: {configAtraso.horarioLimiteAtraso}</small></div></div>
+                  <div className="summary-card"><span className="card-icon">JF</span><div><h3>{dashboard?.resumo?.totalJustificadas || 0}</h3><p>Faltas justificadas</p><small>Incluídas nas faltas do dia</small></div></div>
+                  <div className="summary-card delay-card"><span className="card-icon">AT</span><div><h3>{dashboard?.resumo?.totalAtrasos || 0}</h3><p>Atrasos do dia</p><small>Incluídos nas presenças · Limite: {configAtraso.horarioLimiteAtraso}</small></div></div>
                 </div>
-                <div className="content-card">
-                  <div className="card-header"><h2>Turmas do Dia</h2><p>Status das chamadas por sala.</p></div>
-                  <div className="class-list">
-                    {(dashboard?.turmas || []).map((turma) => (
-                      <div className="class-item class-item-rich" key={turma.id}>
-                        <div><strong>{turma.nome}</strong><span>{turma.total_alunos} alunos cadastrados</span></div>
-                        <div className="attendance-summary">
-                          <span className="summary-present">Presenças: {turma.presentes}</span>
-                          <span className="summary-absent">Faltas: {turma.faltas}</span>
-                          <span className="summary-justified">Justificadas: {turma.justificadas}</span>
-                          <span className="summary-delay">Atrasos: {turma.atrasos || 0}</span>
-                        </div>
-                        <span className={`status ${turma.status_chamada === "finalizada" ? "success" : "warning"}`}>{turma.status_chamada === "finalizada" ? "Finalizada" : "Pendente"}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <TurmasDashboardCard turmas={dashboard?.turmas || []} />
               </>
             ) : (
               <AlunosAtrasadosCard
                 alunos={dashboard?.alunosAtrasados || []}
                 carregarAlunosAtrasados={carregarAlunosAtrasadosDashboard}
-                cacheNamespace="pedagoga"
+                cacheNamespace={ATRASOS_CACHE_NAMESPACE}
                 horarioLimiteAtraso={configAtraso.horarioLimiteAtraso}
               />
             )}
@@ -936,7 +942,7 @@ function Pedagoga() {
 
         {activePage === "chamadas" && (
           <section className="page-section">
-            <div className="page-title"><h1>Chamadas</h1><p>Confirme chamadas temporárias, gere os registros permanentes e edite chamadas salvas hoje.</p></div>
+            <div className="page-title"><h1>Chamadas</h1><p>Revise chamadas temporárias, confirme o registro e acompanhe o bloqueio pelo horário máximo de chegada.</p></div>
             {loadingAbas.chamadas && !cacheRef.current.chamadasCarregadas ? (
               <div className="content-card empty-state">Carregando chamadas...</div>
             ) : (
@@ -1040,23 +1046,35 @@ function Pedagoga() {
                         <button
                           type="button"
                           className="btn-primary edit-attendance-button"
-                          disabled={loading}
+                          disabled={loading || !chamada.pode_confirmar}
                           onClick={(event) => {
                             event.stopPropagation();
                             salvarChamada(chamada);
                           }}
                         >
-                          Salvar & Iniciar Automação
+                          Confirmar chamada
                         </button>
                         <button
                           type="button"
                           className="btn-secondary edit-attendance-button"
+                          disabled={loading || !chamada.pode_editar}
                           onClick={(event) => {
                             event.stopPropagation();
                             editarChamadaPedagogica(chamada);
                           }}
                         >
                           Revisar
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary edit-attendance-button"
+                          disabled={loading || !chamada.pode_editar}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            salvarRevisaoTemporaria(chamada);
+                          }}
+                        >
+                          Salvar revisão
                         </button>
                         <span className="accordion-arrow">{aberta ? "Recolher" : "Expandir"}</span>
                       </div>
@@ -1078,6 +1096,13 @@ function Pedagoga() {
                   </div>;
                 })}
               </div>}
+            </div>
+
+            <div className={`content-card arrival-window-card ${automacaoLiberada ? "closed" : "open"}`} role="status">
+              <strong>Horário máximo de chegada: {configAtraso.horarioLimiteAtraso}</strong>
+              <p>{automacaoLiberada
+                ? "Prazo encerrado. Chamadas confirmadas estão bloqueadas e a automação foi liberada."
+                : `Revisões permanecem abertas até ${configAtraso.horarioLimiteAtraso}. Automação indisponível até esse horário.`}</p>
             </div>
 
             <div className="content-card machine-preference-card">
@@ -1119,8 +1144,8 @@ function Pedagoga() {
                     className="automation-button"
                     type="button"
                     onClick={iniciarAutomacaoChamadasSalvasHoje}
-                    disabled={loading}
-                    title="Registra uma solicitação pendente para o RPA Python processar"
+                    disabled={loading || !automacaoLiberada || chamadasConfirmadas.length === 0}
+                    title={!automacaoLiberada ? "Automação indisponível até o Horário Máximo de Chegada." : "Registra uma solicitação pendente para o RPA Python processar"}
                   >
                     Executar automação
                   </button>
@@ -1135,7 +1160,7 @@ function Pedagoga() {
                       <span className="summary-absent">Faltas: {chamada.total_ausentes}</span>
                       <span className="summary-justified">Justificadas: {chamada.total_justificados}</span><span className="summary-present">Atrasos: {chamada.total_atrasos || 0}</span>
                     </div>
-                    <button className="btn-secondary" type="button" onClick={() => abrirEdicaoChamadaSalva(chamada.id)}>Revisar chamada confirmada</button>
+                    <button className="btn-secondary" type="button" disabled={!chamada.pode_editar} title={!chamada.pode_editar ? "O Horário Máximo de Chegada já passou." : ""} onClick={() => abrirEdicaoChamadaSalva(chamada.id)}>{chamada.pode_editar ? "Revisar chamada confirmada" : "Edição bloqueada"}</button>
                   </div>
                 ))}
               </div>}
@@ -1172,14 +1197,14 @@ function Pedagoga() {
                   {(chamadaConfirmadaEditando.alunos || []).map((freq) => (
                     <div className={`student-row improved ${freq.status === "presente" ? "student-present" : freq.status === "justificado" ? "student-justified" : "student-absent"}`} key={freq.frequencia_id}>
                       <div className="student-main-info">
-                        <div><strong>{freq.aluno_nome}</strong><small>ID aluno: {freq.aluno_id}</small></div>
+                        <div><strong>{freq.aluno_nome}</strong><small>ID aluno: {freq.aluno_id}{freq.atrasado && freq.atraso_minutos != null ? ` • ${freq.atraso_minutos} min de atraso` : ""}</small></div>
                         <span className={`status-badge ${freq.status === "presente" ? "present" : freq.status === "justificado" ? "justified" : "absent"}`}>{freq.atrasado ? "atrasado" : freq.status}</span>
                       </div>
                       <div className="presenca-toggle">
-                        <button type="button" className={freq.status === "presente" && !freq.atrasado ? "status-button presente ativo" : "status-button presente"} onClick={() => salvarEdicaoFrequencia({ ...freq, atrasado: false }, "presente")}>Presente</button>
-                        <button type="button" className={freq.status === "ausente" ? "status-button ausente ativo" : "status-button ausente"} onClick={() => salvarEdicaoFrequencia({ ...freq, atrasado: false }, "ausente")}>Ausente</button>
-                        <button type="button" className={freq.status === "justificado" ? "status-button justificado ativo" : "status-button justificado"} onClick={() => salvarEdicaoFrequencia({ ...freq, atrasado: false }, "justificado", freq.motivo || "Justificado em triagem pedagógica")}>Justificado</button>
-                        <button type="button" className={freq.atrasado ? "status-button presente ativo" : "status-button presente"} disabled={!configAtraso.atrasoLiberado || loading} title={!configAtraso.atrasoLiberado ? `Depois de ${configAtraso.horarioLimiteAtraso}, atraso vira falta.` : ""} onClick={() => marcarAtrasoFrequencia(freq)}>Atrasado</button>
+                        <button type="button" disabled={loading || !chamadaConfirmadaEditando.pode_editar} className={freq.status === "presente" && !freq.atrasado ? "status-button presente ativo" : "status-button presente"} onClick={() => salvarEdicaoFrequencia({ ...freq, atrasado: false }, "presente")}>Presente</button>
+                        <button type="button" disabled={loading || !chamadaConfirmadaEditando.pode_editar} className={freq.status === "ausente" ? "status-button ausente ativo" : "status-button ausente"} onClick={() => salvarEdicaoFrequencia({ ...freq, atrasado: false }, "ausente")}>Ausente</button>
+                        <button type="button" disabled={loading || !chamadaConfirmadaEditando.pode_editar} className={freq.status === "justificado" ? "status-button justificado ativo" : "status-button justificado"} onClick={() => salvarEdicaoFrequencia({ ...freq, atrasado: false }, "justificado", freq.motivo || "Justificado em triagem pedagógica")}>Justificado</button>
+                        <button type="button" className={freq.atrasado ? "status-button presente ativo" : "status-button presente"} disabled={!configAtraso.atrasoLiberado || loading || !chamadaConfirmadaEditando.pode_editar} title={!configAtraso.atrasoLiberado ? `Depois de ${configAtraso.horarioLimiteAtraso}, atraso vira falta.` : ""} onClick={() => marcarAtrasoFrequencia(freq)}>Atrasado</button>
                       </div>
                       {freq.status === "justificado" && <div className="justify-box improved"><label>Motivo salvo</label><textarea value={freq.motivo || ""} onChange={(e) => setChamadaConfirmadaEditando((prev) => ({ ...prev, alunos: prev.alunos.map((item) => item.frequencia_id === freq.frequencia_id ? { ...item, motivo: e.target.value } : item) }))} onClick={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} /><div className="justify-actions"><button className="btn-primary justify-save" type="button" disabled={loading || !String(freq.motivo || "").trim()} onClick={(event) => { event.stopPropagation(); salvarEdicaoFrequencia(freq, "justificado", freq.motivo || ""); }}>Confirmar justificativa</button></div></div>}
                     </div>

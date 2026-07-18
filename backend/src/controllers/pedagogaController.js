@@ -2,32 +2,31 @@ const db = require("../database/db");
 const { formatarNome } = require("../utils/formatadores");
 const { garantirColunasAtraso, normalizarHorarioAtraso, normalizarDataHoraAtraso } = require("../utils/atrasoUtils");
 const { dataBrasiliaISO, horarioBrasilia, dataHoraBrasiliaMySQL } = require("../utils/brasiliaTime");
+const { garantirConfiguracao } = require("./configuracoesEscolaController");
+const fluxoService = require("../services/chamadaFluxoService");
+const chamadaService = require("../services/chamadaService");
+const atrasoService = require("../services/atrasoService");
+const dashboardService = require("../services/dashboardService");
+const { registrarAuditoria } = require("../services/chamadaAuditoriaService");
+const { contarTotaisFrequencia, condicoesFrequenciaSql } = require("../services/frequenciaMetricasService");
+const { serializarStatusAutomacao } = require("../utils/publicDtos");
+
+const FREQUENCIA_SQL = condicoesFrequenciaSql("f");
 
 const MATERIA_PEDAGOGICA = "Chamada Pedagógica";
 const MOTIVO_PADRAO_JUSTIFICATIVA = "Justificado em triagem pedagógica";
 const MENSAGEM_WHATSAPP_PADRAO = "Prezado(a) {nome_responsavel}, informamos que o(a) estudante {nome_aluno} não compareceu à aula na data de hoje, {data}, e não identificamos uma justificativa para a sua ausência. Solicitamos, gentilmente, que entrem em contato conosco para informar o motivo do não comparecimento. Agradecemos a cooperação.";
 const TAGS_MENSAGEM_WHATSAPP = ["{nome_responsavel}", "{nome_aluno}", "{data}"];
-const ERRO_PUBLICO_ROBO = "Falha no disparo. Verifique a máquina local ou o status do WhatsApp Web.";
 
-function sanitizarAutomacao(row) {
-  if (!row) return row;
-
-  const { erro, ...automacao } = row;
-
-  if (row.status === "erro" && erro) {
-    automacao.erro_publico = ERRO_PUBLICO_ROBO;
-  } else if (row.status === "expirado") {
-    automacao.erro_publico = "A automação expirou antes de ser concluída. Verifique a máquina local.";
-  } else if (row.status === "cancelado") {
-    automacao.erro_publico = "Solicitação cancelada antes do início da execução.";
-  } else {
-    automacao.erro_publico = null;
-  }
-
-  return automacao;
+function auditarBloqueioHorario(error, req) {
+  if (error?.message !== fluxoService.MENSAGENS.HORARIO_ENCERRADO) return;
+  registrarAuditoria(db, {
+    chamadaId: Number(req.params.id),
+    usuario: req.usuario,
+    evento: "EDICAO_BLOQUEADA_POR_HORARIO",
+    valoresNovos: { rota: req.originalUrl },
+  }).catch(() => {});
 }
-
-
 function hojeLocalISO() {
   return dataBrasiliaISO();
 }
@@ -67,6 +66,14 @@ function statusFrequencia(aluno) {
   return "ausente";
 }
 
+function atrasoMinutosInformado(aluno) {
+  const valor = aluno.atraso_minutos ?? aluno.atrasoMinutos;
+  if (valor === null || valor === undefined || valor === "") return null;
+
+  const minutos = Number(valor);
+  return Number.isFinite(minutos) && minutos >= 0 ? Math.floor(minutos) : null;
+}
+
 function prepararAlunosParaConfirmacao(alunos = []) {
   if (!Array.isArray(alunos) || alunos.length === 0) {
     const erro = new Error("A chamada precisa ter pelo menos um aluno.");
@@ -74,20 +81,19 @@ function prepararAlunosParaConfirmacao(alunos = []) {
     throw erro;
   }
 
-  const alunosValidos = alunos
-    .map((aluno) => ({
-      aluno_id: obterAlunoId(aluno),
-      aluno_nome: obterNomeAluno(aluno),
-      status: statusFrequencia(aluno),
-      atrasado: Boolean(aluno.atrasado),
-      horario_registro_atraso: normalizarHorarioAtraso(aluno.horario_registro_atraso || aluno.horarioRegistroAtraso),
-      atraso_registrado_em: normalizarDataHoraAtraso(aluno.atraso_registrado_em || aluno.atrasoRegistradoEm),
-      motivo: motivoJustificativa(aluno),
-    }))
-    .filter((aluno) => aluno.aluno_id && aluno.aluno_nome);
+  const alunosValidos = alunos.map((aluno) => ({
+    aluno_id: obterAlunoId(aluno),
+    aluno_nome: obterNomeAluno(aluno),
+    status: statusFrequencia(aluno),
+    atrasado: Boolean(aluno.atrasado),
+    horario_registro_atraso: normalizarHorarioAtraso(aluno.horario_registro_atraso || aluno.horarioRegistroAtraso),
+    atraso_registrado_em: normalizarDataHoraAtraso(aluno.atraso_registrado_em || aluno.atrasoRegistradoEm),
+    atraso_minutos: atrasoMinutosInformado(aluno),
+    motivo: motivoJustificativa(aluno),
+  }));
 
-  if (alunosValidos.length === 0) {
-    const erro = new Error("Nenhum aluno válido foi enviado para confirmação.");
+  if (alunosValidos.some((aluno) => !aluno.aluno_id || !aluno.aluno_nome)) {
+    const erro = new Error("Todos os alunos precisam possuir ID e nome válidos.");
     erro.status = 400;
     throw erro;
   }
@@ -101,23 +107,18 @@ function prepararAlunosParaConfirmacao(alunos = []) {
       ...aluno,
       horario_registro_atraso: null,
       atraso_registrado_em: null,
+      atraso_minutos: null,
     };
   });
 }
 
-function contarTotais(alunos = []) {
-  return alunos.reduce(
-    (acc, aluno) => {
-      if (aluno.status === "presente") acc.total_presentes += 1;
-      if (aluno.status === "ausente" || aluno.status === "justificado") acc.total_ausentes += 1;
-      if (aluno.status === "justificado") acc.total_justificados += 1;
-      if (aluno.atrasado) acc.total_atrasos += 1;
-      return acc;
-    },
-    { total_presentes: 0, total_ausentes: 0, total_justificados: 0, total_atrasos: 0 }
-  );
+function completarDadosAtraso(alunos, horarioChamada, horarioMarcacao, dataHoraMarcacao) {
+  return atrasoService.completarDadosAtraso(prepararAlunosParaConfirmacao(alunos), {
+    horarioChamada,
+    horarioMarcacao,
+    dataHoraMarcacao,
+  });
 }
-
 
 async function validarAlunosPertencemTurma(connection, turmaId, alunos) {
   const ids = [...new Set(alunos.map((aluno) => Number(aluno.aluno_id)).filter(Boolean))];
@@ -134,19 +135,15 @@ async function validarAlunosPertencemTurma(connection, turmaId, alunos) {
     throw erro;
   }
 
-  const placeholders = ids.map(() => "?").join(",");
   const [rows] = await connection.execute(
-    `SELECT id FROM alunos WHERE turma_id = ? AND id IN (${placeholders})`,
-    [turmaId, ...ids]
+    "SELECT id FROM alunos WHERE turma_id = ? ORDER BY id ASC",
+    [turmaId]
   );
 
-  if (rows.length !== ids.length) {
-    const idsEncontrados = new Set(rows.map((row) => Number(row.id)));
-    const idsInvalidos = ids.filter((id) => !idsEncontrados.has(id));
-    const erro = new Error(`Há aluno(s) que não pertencem à turma selecionada: ${idsInvalidos.join(", ")}.`);
-    erro.status = 400;
-    throw erro;
-  }
+  fluxoService.assertPermission(
+    fluxoService.validateCompleteStudentList(rows, alunos),
+    409
+  );
 }
 
 function erroDuplicidadeChamada(error) {
@@ -157,8 +154,15 @@ function erroDuplicidadeConfirmacao(error) {
   return error && error.code === "ER_DUP_ENTRY" && String(error.message || "").includes("uk_reg_chamada_origem");
 }
 
-function montarAlunosJSON(alunos = []) {
-  const alunosPreparados = prepararAlunosParaConfirmacao(alunos);
+function montarAlunosJSON(alunos = [], contextoAtraso = null) {
+  const alunosPreparados = contextoAtraso
+    ? completarDadosAtraso(
+      alunos,
+      contextoAtraso.horarioChamada,
+      contextoAtraso.horarioMarcacao,
+      contextoAtraso.dataHoraMarcacao
+    )
+    : prepararAlunosParaConfirmacao(alunos);
 
   return alunosPreparados.map((aluno) => ({
     aluno_id: aluno.aluno_id,
@@ -167,167 +171,23 @@ function montarAlunosJSON(alunos = []) {
     atrasado: Boolean(aluno.atrasado),
     horario_registro_atraso: aluno.horario_registro_atraso || null,
     atraso_registrado_em: aluno.atraso_registrado_em || null,
+    atraso_minutos: aluno.atraso_minutos ?? null,
+    motivo: aluno.motivo || null,
   }));
 }
 
 async function dashboard(req, res, next) {
   try {
     const data = req.query.data || hojeLocalISO();
-    const incluirAlunosAtrasados = String(req.query.incluirAlunosAtrasados || req.query.incluir_alunos_atrasados || "") === "1";
-
-    const consultasDashboard = [
-      db.execute(
-        `
-        SELECT t.id, t.nome, COUNT(a.id) AS total_alunos
-        FROM turmas t
-        LEFT JOIN alunos a ON a.turma_id = t.id
-        GROUP BY t.id, t.nome
-        ORDER BY t.nome ASC
-        `
-      ),
-      db.execute(
-        `
-        SELECT
-          COUNT(DISTINCT rcc.id) AS chamadasHoje,
-          COALESCE(SUM(f.status = 'presente'), 0) AS totalPresentes,
-          COALESCE(SUM(f.status IN ('ausente', 'justificado')), 0) AS totalFaltas,
-          COALESCE(SUM(f.status = 'justificado'), 0) AS totalJustificadas,
-          COALESCE(SUM(f.atrasado = TRUE), 0) AS totalAtrasos
-        FROM registros_chamadas_confirmadas rcc
-        LEFT JOIN registros_frequencia_alunos f ON f.registro_chamada_id = rcc.id
-        WHERE rcc.data_chamada = ?
-        `,
-        [data]
-      ),
-      db.execute(
-        `
-        SELECT COUNT(*) AS pendentes
-        FROM chamadas_diarias
-        WHERE data_chamada = ? AND status = 'pendente'
-        `,
-        [data]
-      ),
-      db.execute(
-        `
-        SELECT
-          rcc.turma_id,
-          COALESCE(SUM(f.status = 'presente'), 0) AS presentes,
-          COALESCE(SUM(f.status IN ('ausente', 'justificado')), 0) AS faltas,
-          COALESCE(SUM(f.status = 'justificado'), 0) AS justificadas,
-          COALESCE(SUM(f.atrasado = TRUE), 0) AS atrasos,
-          COUNT(DISTINCT rcc.id) AS chamadas_confirmadas
-        FROM registros_chamadas_confirmadas rcc
-        LEFT JOIN registros_frequencia_alunos f ON f.registro_chamada_id = rcc.id
-        WHERE rcc.data_chamada = ?
-        GROUP BY rcc.turma_id
-        `,
-        [data]
-      ),
-      db.execute(
-        `
-        SELECT turma_id, COUNT(*) AS chamadas_pendentes
-        FROM chamadas_diarias
-        WHERE data_chamada = ? AND status = 'pendente'
-        GROUP BY turma_id
-        `,
-        [data]
-      ),
-    ];
-
-    if (incluirAlunosAtrasados) {
-      consultasDashboard.push(
-        db.execute(
-          `
-          SELECT
-            f.id,
-            f.aluno_id AS alunoId,
-            f.aluno_nome AS nome,
-            f.turma_id AS turmaId,
-            f.turma_nome AS turma,
-            f.status,
-            f.atrasado,
-            TIME_FORMAT(rcc.horario_chamada, '%H:%i:%s') AS horarioChamada,
-            TIME_FORMAT(f.horario_registro_atraso, '%H:%i:%s') AS horarioRegistroAtraso,
-            GREATEST(TIMESTAMPDIFF(MINUTE, rcc.horario_chamada, f.horario_registro_atraso), 0) AS minutosAtraso,
-            DATE_FORMAT(f.atraso_registrado_em, '%Y-%m-%d %H:%i:%s') AS atrasoRegistradoEm,
-            DATE_FORMAT(f.data_chamada, '%Y-%m-%d') AS dataChamada
-          FROM registros_frequencia_alunos f
-          INNER JOIN registros_chamadas_confirmadas rcc ON rcc.id = f.registro_chamada_id
-          WHERE rcc.data_chamada = ?
-            AND f.atrasado = TRUE
-          ORDER BY f.turma_nome ASC, f.horario_registro_atraso ASC, f.aluno_nome ASC
-          `,
-          [data]
-        )
-      );
-    }
-
-    const [[turmas], [resumoConfirmadas], [resumoPendentes], [resumoPorTurma], [pendentesPorTurma], alunosAtrasadosResult = []] = await Promise.all(consultasDashboard);
-    const alunosAtrasadosRows = alunosAtrasadosResult[0] || [];
-
-    const confirmadas = resumoConfirmadas[0] || {};
-    const totalPresentes = Number(confirmadas.totalPresentes || 0);
-    const totalFaltas = Number(confirmadas.totalFaltas || 0);
-    const totalJustificadas = Number(confirmadas.totalJustificadas || 0);
-    const totalAtrasos = Number(confirmadas.totalAtrasos || 0);
-    const totalLancamentos = totalPresentes + totalFaltas;
-
-    const mapaTurmas = new Map(
-      resumoPorTurma.map((item) => [
-        Number(item.turma_id || 0),
-        {
-          presentes: Number(item.presentes || 0),
-          faltas: Number(item.faltas || 0),
-          justificadas: Number(item.justificadas || 0),
-          atrasos: Number(item.atrasos || 0),
-          chamadas_confirmadas: Number(item.chamadas_confirmadas || 0),
-        },
-      ])
-    );
-
-    const mapaPendentes = new Map(
-      pendentesPorTurma.map((item) => [Number(item.turma_id || 0), Number(item.chamadas_pendentes || 0)])
-    );
-
-    const turmasDoDia = turmas.map((turma) => {
-      const resumo = mapaTurmas.get(Number(turma.id)) || {
-        presentes: 0,
-        faltas: 0,
-        justificadas: 0,
-        atrasos: 0,
-        chamadas_confirmadas: 0,
-      };
-      const chamadasPendentesTurma = mapaPendentes.get(Number(turma.id)) || 0;
-
-      return {
-        id: turma.id,
-        nome: turma.nome,
-        total_alunos: Number(turma.total_alunos || 0),
-        presentes: resumo.presentes,
-        faltas: resumo.faltas,
-        justificadas: resumo.justificadas,
-        atrasos: resumo.atrasos,
-        status_chamada: resumo.chamadas_confirmadas > 0 ? "finalizada" : chamadasPendentesTurma > 0 ? "aguardando_confirmacao" : "pendente",
-      };
-    });
-
-    return res.json({
+    const incluirAlunosAtrasados = String(
+      req.query.incluirAlunosAtrasados || req.query.incluir_alunos_atrasados || ""
+    ) === "1";
+    const resultado = await dashboardService.obterDashboardDia({
       data,
-      resumo: {
-        chamadasHoje: Number(confirmadas.chamadasHoje || 0),
-        chamadasPendentes: Number(resumoPendentes[0]?.pendentes || 0),
-        totalPresentes,
-        totalFaltas,
-        totalJustificadas,
-        totalAtrasos,
-        taxaFrequencia: totalLancamentos > 0 ? Math.round((totalPresentes / totalLancamentos) * 100) : 0,
-      },
-      alunosAtrasados: alunosAtrasadosRows.map((aluno) => ({
-        ...aluno,
-        atrasado: Boolean(aluno.atrasado),
-      })),
-      turmas: turmasDoDia,
+      incluirAlunosAtrasados,
     });
+
+    return res.json(resultado);
   } catch (error) {
     return next(error);
   }
@@ -336,10 +196,12 @@ async function dashboard(req, res, next) {
 async function chamadasDoDia(req, res, next) {
   try {
     const data = req.query.data || hojeLocalISO();
+    const config = await garantirConfiguracao();
     const [rows] = await db.execute(
       `
       SELECT id, professor_id, professor_nome, turma_id, turma_nome, materia,
-             data_chamada, horario_chamada, alunos, total_presentes, total_ausentes, status
+             data_chamada, horario_chamada, alunos, total_presentes, total_ausentes, status,
+             versao, atualizado_em
       FROM chamadas_diarias
       WHERE data_chamada = ? AND status = 'pendente'
       ORDER BY horario_chamada DESC, id DESC
@@ -347,7 +209,17 @@ async function chamadasDoDia(req, res, next) {
       [data]
     );
 
-    return res.json({ chamadas: rows.map((chamada) => ({ ...chamada, alunos: parseAlunos(chamada.alunos) })) });
+    return res.json({
+      chamadas: rows.map((chamada) => ({
+        ...chamada,
+        status_fluxo: fluxoService.statusEfetivo(chamada, config),
+        pode_editar: fluxoService.canPedagogueEditCall(chamada, req.usuario, config).permitido,
+        pode_confirmar: fluxoService.canConfirmCall(chamada, req.usuario, config).permitido,
+        alunos: parseAlunos(chamada.alunos),
+      })),
+      horario_limite_atraso: config.horario_limite_atraso,
+      horario_servidor: config.horario_servidor,
+    });
   } catch (error) {
     return next(error);
   }
@@ -356,19 +228,40 @@ async function chamadasDoDia(req, res, next) {
 async function chamadasConfirmadasHoje(req, res, next) {
   try {
     const data = req.query.data || hojeLocalISO();
+    const config = await garantirConfiguracao();
+    if (fluxoService.hasMaximumArrivalTimePassed(config)) {
+      await db.execute(
+        `UPDATE chamadas_diarias cd
+         INNER JOIN registros_chamadas_confirmadas rcc ON rcc.chamada_diaria_id_origem = cd.id
+         SET cd.bloqueada_em = COALESCE(cd.bloqueada_em, TIMESTAMP(rcc.data_chamada, ?))
+         WHERE rcc.data_chamada = ? AND cd.status = 'confirmada'`,
+        [String(config.horario_limite_atraso).slice(0, 8), data]
+      );
+    }
     const [rows] = await db.execute(
       `
-      SELECT id, chamada_diaria_id_origem, professor_id, professor_nome, pedagoga_id, pedagoga_nome,
-             turma_id, turma_nome, materia, data_chamada, horario_chamada,
-             total_presentes, total_ausentes, total_justificados, total_atrasos, observacao, confirmado_em
-      FROM registros_chamadas_confirmadas
-      WHERE data_chamada = ?
-      ORDER BY confirmado_em DESC, id DESC
+      SELECT rcc.id, rcc.chamada_diaria_id_origem, rcc.professor_nome,
+             rcc.turma_nome, rcc.materia, rcc.data_chamada,
+             rcc.total_presentes, rcc.total_ausentes, rcc.total_justificados, rcc.total_atrasos,
+             COALESCE(cd.status, 'confirmada') AS status, cd.versao AS versao_chamada
+      FROM registros_chamadas_confirmadas rcc
+      LEFT JOIN chamadas_diarias cd ON cd.id = rcc.chamada_diaria_id_origem
+      WHERE rcc.data_chamada = ?
+      ORDER BY rcc.confirmado_em DESC, rcc.id DESC
       `,
       [data]
     );
 
-    return res.json({ chamadas: rows });
+    return res.json({
+      chamadas: rows.map((chamada) => ({
+        ...chamada,
+        status_fluxo: fluxoService.statusEfetivo(chamada, config),
+        pode_editar: Boolean(chamada.chamada_diaria_id_origem && chamada.versao_chamada) && fluxoService.canPedagogueEditCall(chamada, req.usuario, config).permitido,
+      })),
+      automacao_liberada: fluxoService.canStartAutomation(config, rows.length > 0).permitido,
+      horario_limite_atraso: config.horario_limite_atraso,
+      horario_servidor: config.horario_servidor,
+    });
   } catch (error) {
     return next(error);
   }
@@ -378,14 +271,17 @@ async function detalharChamadaConfirmada(req, res, next) {
   try {
     const id = Number(req.params.id);
     const data = hojeLocalISO();
+    const config = await garantirConfiguracao();
 
     const [chamadas] = await db.execute(
       `
-      SELECT id, chamada_diaria_id_origem, professor_id, professor_nome, pedagoga_id, pedagoga_nome,
-             turma_id, turma_nome, materia, data_chamada, horario_chamada,
-             total_presentes, total_ausentes, total_justificados, total_atrasos, observacao, confirmado_em
-      FROM registros_chamadas_confirmadas
-      WHERE id = ? AND data_chamada = ?
+      SELECT rcc.id, rcc.chamada_diaria_id_origem, rcc.professor_nome,
+             rcc.turma_nome, rcc.materia, rcc.data_chamada,
+             rcc.total_presentes, rcc.total_ausentes, rcc.total_justificados, rcc.total_atrasos,
+             COALESCE(cd.status, 'confirmada') AS status, cd.versao AS versao_chamada
+      FROM registros_chamadas_confirmadas rcc
+      LEFT JOIN chamadas_diarias cd ON cd.id = rcc.chamada_diaria_id_origem
+      WHERE rcc.id = ? AND rcc.data_chamada = ?
       LIMIT 1
       `,
       [id, data]
@@ -401,7 +297,9 @@ async function detalharChamadaConfirmada(req, res, next) {
         f.aluno_nome,
         f.status,
         f.atrasado,
-        j.id AS justificativa_id,
+        f.horario_registro_atraso,
+        f.atraso_registrado_em,
+        f.atraso_minutos,
         j.motivo
       FROM registros_frequencia_alunos f
       LEFT JOIN justificativas_frequencia j ON j.frequencia_aluno_id = f.id
@@ -411,7 +309,17 @@ async function detalharChamadaConfirmada(req, res, next) {
       [id]
     );
 
-    return res.json({ chamada: { ...chamadas[0], alunos } });
+    const chamada = chamadas[0];
+    return res.json({
+      chamada: {
+        ...chamada,
+        status_fluxo: fluxoService.statusEfetivo(chamada, config),
+        pode_editar: Boolean(chamada.chamada_diaria_id_origem && chamada.versao_chamada) && fluxoService.canPedagogueEditCall(chamada, req.usuario, config).permitido,
+        horario_limite_atraso: config.horario_limite_atraso,
+        horario_servidor: config.horario_servidor,
+        alunos,
+      },
+    });
   } catch (error) {
     return next(error);
   }
@@ -447,7 +355,7 @@ async function confirmarChamada(req, res, next) {
     const [chamadas] = await connection.execute(
       `
       SELECT id, turma_id, turma_nome, professor_id, professor_nome, materia, data_chamada,
-             horario_chamada, alunos, total_presentes, total_ausentes, status
+             horario_chamada, alunos, total_presentes, total_ausentes, status, versao
       FROM chamadas_diarias
       WHERE id = ? AND data_chamada = ? AND status = 'pendente'
       LIMIT 1
@@ -463,12 +371,24 @@ async function confirmarChamada(req, res, next) {
       throw erro;
     }
 
+    const configFluxo = await garantirConfiguracao(connection);
+    fluxoService.assertPermission(fluxoService.canConfirmCall(chamada, req.usuario, configFluxo));
+    fluxoService.assertPermission(fluxoService.validateCallVersion(chamada, req.body.versao), 409);
+
     const alunosBase = Array.isArray(req.body.alunos) && req.body.alunos.length > 0
       ? req.body.alunos
       : parseAlunos(chamada.alunos);
 
-    const alunos = prepararAlunosParaConfirmacao(alunosBase);
-    await validarAlunosPertencemTurma(connection, chamada.turma_id, alunos);
+    const alunos = completarDadosAtraso(
+      alunosBase,
+      chamada.horario_chamada,
+      horarioBrasilia(),
+      dataHoraBrasiliaMySQL()
+    );
+    fluxoService.assertPermission(
+      fluxoService.validateCompleteStudentList(parseAlunos(chamada.alunos), alunos),
+      409
+    );
 
     const [confirmacaoExistente] = await connection.execute(
       "SELECT id FROM registros_chamadas_confirmadas WHERE chamada_diaria_id_origem = ? LIMIT 1 FOR UPDATE",
@@ -480,7 +400,7 @@ async function confirmarChamada(req, res, next) {
       throw erro;
     }
 
-    const totais = contarTotais(alunos);
+    const totais = contarTotaisFrequencia(alunos);
 
     const [registroResult] = await connection.execute(
       `
@@ -515,8 +435,8 @@ async function confirmarChamada(req, res, next) {
       const [frequenciaResult] = await connection.execute(
         `
         INSERT INTO registros_frequencia_alunos
-          (registro_chamada_id, aluno_id, aluno_nome, turma_id, turma_nome, materia, data_chamada, status, atrasado, horario_registro_atraso, atraso_registrado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (registro_chamada_id, aluno_id, aluno_nome, turma_id, turma_nome, materia, data_chamada, status, atrasado, horario_registro_atraso, atraso_registrado_em, atraso_minutos, alterado_por_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           registroChamadaId,
@@ -528,8 +448,10 @@ async function confirmarChamada(req, res, next) {
           chamada.data_chamada,
           aluno.status,
           aluno.atrasado ? 1 : 0,
-          aluno.atrasado ? (aluno.horario_registro_atraso || chamada.horario_chamada) : null,
-          aluno.atrasado ? (aluno.atraso_registrado_em || null) : null,
+          aluno.atrasado ? aluno.horario_registro_atraso : null,
+          aluno.atrasado ? aluno.atraso_registrado_em : null,
+          aluno.atrasado ? aluno.atraso_minutos : null,
+          pedagoga.id,
         ]
       );
 
@@ -549,13 +471,27 @@ async function confirmarChamada(req, res, next) {
             pedagoga.nome,
           ]
         );
+        await registrarAuditoria(connection, {
+          chamadaId: chamada.id,
+          usuario: req.usuario,
+          evento: "JUSTIFICATIVA_ADICIONADA",
+          valoresNovos: { aluno_id: aluno.aluno_id, motivo: aluno.motivo || MOTIVO_PADRAO_JUSTIFICATIVA },
+        });
       }
     }
 
     await connection.execute(
-      "UPDATE chamadas_diarias SET status = 'confirmada' WHERE id = ?",
-      [chamada.id]
+      "UPDATE chamadas_diarias SET status = 'confirmada', confirmada_por_id = ?, confirmado_em = ?, versao = versao + 1 WHERE id = ? AND status = 'pendente' AND versao = ?",
+      [pedagoga.id, dataHoraBrasiliaMySQL(), chamada.id, chamada.versao]
     );
+
+    await registrarAuditoria(connection, {
+      chamadaId: chamada.id,
+      usuario: req.usuario,
+      evento: "CHAMADA_CONFIRMADA",
+      valoresAnteriores: { status: "TEMPORARIA", versao: chamada.versao },
+      valoresNovos: { status: "CONFIRMADA", confirmada_por_id: pedagoga.id, versao: Number(chamada.versao) + 1, totais },
+    });
 
     await connection.commit();
     transacaoIniciada = false;
@@ -570,6 +506,7 @@ async function confirmarChamada(req, res, next) {
     if (transacaoIniciada && connection) {
       await connection.rollback();
     }
+    auditarBloqueioHorario(error, req);
     if (erroDuplicidadeConfirmacao(error)) {
       const erro = new Error("Essa chamada já foi confirmada anteriormente.");
       erro.status = 409;
@@ -615,9 +552,11 @@ async function atualizarFrequenciaAluno(req, res, next) {
 
     const [frequencias] = await connection.execute(
       `
-      SELECT f.*, r.data_chamada
-      FROM registros_frequencia_alunos f
-      INNER JOIN registros_chamadas_confirmadas r ON r.id = f.registro_chamada_id
+       SELECT f.*, r.data_chamada, r.horario_chamada, r.chamada_diaria_id_origem,
+              cd.status AS chamada_status, cd.versao AS chamada_versao
+       FROM registros_frequencia_alunos f
+       INNER JOIN registros_chamadas_confirmadas r ON r.id = f.registro_chamada_id
+       INNER JOIN chamadas_diarias cd ON cd.id = r.chamada_diaria_id_origem
       WHERE f.id = ? AND r.data_chamada = ?
       LIMIT 1
       FOR UPDATE
@@ -632,18 +571,37 @@ async function atualizarFrequenciaAluno(req, res, next) {
       throw erro;
     }
 
+    const chamadaFluxo = {
+      id: frequencia.chamada_diaria_id_origem,
+      status: frequencia.chamada_status,
+      versao: frequencia.chamada_versao,
+    };
+    const configFluxo = await garantirConfiguracao(connection);
+    fluxoService.assertPermission(fluxoService.canPedagogueEditCall(chamadaFluxo, req.usuario, configFluxo));
+    fluxoService.assertPermission(fluxoService.validateCallVersion(chamadaFluxo, req.body.versao), 409);
+    const horarioMarcacao = horarioBrasilia();
+    const atrasoMinutos = atrasado
+      ? fluxoService.calculateStudentDelay(frequencia.horario_chamada, frequencia.horario_registro_atraso || horarioMarcacao)
+      : null;
+
     await connection.execute(
       `
       UPDATE registros_frequencia_alunos
       SET status = ?,
-          atrasado = ?,
-          horario_registro_atraso = CASE WHEN ? = 1 THEN COALESCE(horario_registro_atraso, ?) ELSE NULL END,
-          atraso_registrado_em = CASE WHEN ? = 1 THEN COALESCE(atraso_registrado_em, ?) ELSE NULL END
+           atrasado = ?,
+           horario_registro_atraso = CASE WHEN ? = 1 THEN COALESCE(horario_registro_atraso, ?) ELSE NULL END,
+           atraso_registrado_em = CASE WHEN ? = 1 THEN COALESCE(atraso_registrado_em, ?) ELSE NULL END,
+           atraso_minutos = ?,
+           alterado_por_id = ?
       WHERE id = ?
       `,
-      [status, atrasado ? 1 : 0, atrasado ? 1 : 0, horarioBrasilia(), atrasado ? 1 : 0, dataHoraBrasiliaMySQL(), frequenciaId]
+      [status, atrasado ? 1 : 0, atrasado ? 1 : 0, horarioMarcacao, atrasado ? 1 : 0, dataHoraBrasiliaMySQL(), atrasoMinutos, pedagoga.id, frequenciaId]
     );
 
+    const [[justificativaAnterior]] = await connection.execute(
+      "SELECT motivo FROM justificativas_frequencia WHERE frequencia_aluno_id = ? LIMIT 1 FOR UPDATE",
+      [frequenciaId]
+    );
     await connection.execute("DELETE FROM justificativas_frequencia WHERE frequencia_aluno_id = ?", [frequenciaId]);
 
     if (status === "justificado") {
@@ -655,17 +613,24 @@ async function atualizarFrequenciaAluno(req, res, next) {
         `,
         [frequenciaId, frequencia.aluno_id, frequencia.registro_chamada_id, motivo, pedagoga.id, pedagoga.nome]
       );
+      await registrarAuditoria(connection, {
+        chamadaId: frequencia.chamada_diaria_id_origem,
+        usuario: req.usuario,
+        evento: "JUSTIFICATIVA_ADICIONADA",
+        valoresAnteriores: { aluno_id: frequencia.aluno_id, motivo: justificativaAnterior?.motivo || null },
+        valoresNovos: { aluno_id: frequencia.aluno_id, motivo },
+      });
     }
 
     const [[totais]] = await connection.execute(
       `
       SELECT
-        SUM(status = 'presente') AS total_presentes,
-        SUM(status IN ('ausente', 'justificado')) AS total_ausentes,
-        SUM(status = 'justificado') AS total_justificados,
-        SUM(atrasado = TRUE) AS total_atrasos
-      FROM registros_frequencia_alunos
-      WHERE registro_chamada_id = ?
+        SUM(${FREQUENCIA_SQL.presente}) AS total_presentes,
+        SUM(${FREQUENCIA_SQL.ausente}) AS total_ausentes,
+        SUM(${FREQUENCIA_SQL.justificado}) AS total_justificados,
+        SUM(${FREQUENCIA_SQL.atrasado}) AS total_atrasos
+      FROM registros_frequencia_alunos f
+      WHERE f.registro_chamada_id = ?
       `,
       [frequencia.registro_chamada_id]
     );
@@ -686,6 +651,18 @@ async function atualizarFrequenciaAluno(req, res, next) {
       ]
     );
 
+    await connection.execute(
+      "UPDATE chamadas_diarias SET versao = versao + 1 WHERE id = ? AND versao = ?",
+      [frequencia.chamada_diaria_id_origem, frequencia.chamada_versao]
+    );
+    await registrarAuditoria(connection, {
+      chamadaId: frequencia.chamada_diaria_id_origem,
+      usuario: req.usuario,
+      evento: "CHAMADA_EDITADA_PELA_PEDAGOGIA",
+      valoresAnteriores: { aluno_id: frequencia.aluno_id, status: frequencia.status, atrasado: Boolean(frequencia.atrasado), versao: frequencia.chamada_versao },
+      valoresNovos: { aluno_id: frequencia.aluno_id, status, atrasado, atraso_minutos: atrasoMinutos, versao: Number(frequencia.chamada_versao) + 1 },
+    });
+
     await connection.commit();
     transacaoIniciada = false;
 
@@ -697,11 +674,13 @@ async function atualizarFrequenciaAluno(req, res, next) {
         total_justificados: Number(totais.total_justificados || 0),
         total_atrasos: Number(totais.total_atrasos || 0),
       },
+      versao_chamada: Number(frequencia.chamada_versao) + 1,
     });
   } catch (error) {
     if (transacaoIniciada && connection) {
       await connection.rollback();
     }
+    auditarBloqueioHorario(error, req);
     return next(error);
   } finally {
     if (connection) connection.release();
@@ -767,7 +746,7 @@ async function criarChamadaPedagogica(req, res, next) {
 
     const alunosPreparados = prepararAlunosParaConfirmacao(alunos);
     await validarAlunosPertencemTurma(db, turmaId, alunosPreparados);
-    const totais = contarTotais(alunosPreparados);
+    const totais = contarTotaisFrequencia(alunosPreparados);
 
     const [result] = await db.execute(
       `
@@ -802,34 +781,72 @@ async function atualizarChamada(req, res, next) {
   try {
     const chamadaId = Number(req.params.id);
     const materia = String(req.body.materia || req.body.disciplina || MATERIA_PEDAGOGICA).trim();
-    const alunos = montarAlunosJSON(req.body.alunos);
 
     if (!chamadaId) return res.status(400).json({ erro: "Chamada inválida." });
 
-    const alunosPreparados = prepararAlunosParaConfirmacao(alunos);
+    const resultado = await chamadaService.executarTransacao(db, async (connection) => {
+      const dataHoje = dataBrasiliaISO();
+      const [chamadasAtuais] = await connection.execute(
+        "SELECT id, turma_id, status, versao, materia, horario_chamada, alunos FROM chamadas_diarias WHERE id = ? AND data_chamada = ? LIMIT 1 FOR UPDATE",
+        [chamadaId, dataHoje]
+      );
 
-    const [chamadasAtuais] = await db.execute(
-      "SELECT turma_id FROM chamadas_diarias WHERE id = ? AND status = 'pendente' AND data_chamada = ? LIMIT 1",
-      [chamadaId, dataBrasiliaISO()]
-    );
-    if (!chamadasAtuais[0]) return res.status(404).json({ erro: "Chamada pendente de hoje não encontrada." });
+      const chamadaAtual = chamadasAtuais[0];
+      if (!chamadaAtual) {
+        const erro = new Error("Chamada pendente de hoje não encontrada.");
+        erro.status = 404;
+        throw erro;
+      }
 
-    await validarAlunosPertencemTurma(db, chamadasAtuais[0].turma_id, alunosPreparados);
-    const totais = contarTotais(alunosPreparados);
+      const configFluxo = await garantirConfiguracao(connection);
+      fluxoService.assertPermission(fluxoService.canPedagogueEditCall(chamadaAtual, req.usuario, configFluxo));
+      fluxoService.assertPermission(fluxoService.validateCallVersion(chamadaAtual, req.body.versao), 409);
 
-    const [result] = await db.execute(
-      `
-      UPDATE chamadas_diarias
-      SET materia = ?, alunos = ?, total_presentes = ?, total_ausentes = ?
-      WHERE id = ? AND status = 'pendente' AND data_chamada = ?
-      `,
-      [materia, JSON.stringify(alunos), totais.total_presentes, totais.total_ausentes, chamadaId, dataBrasiliaISO()]
-    );
+      const alunos = montarAlunosJSON(req.body.alunos, {
+        horarioChamada: chamadaAtual.horario_chamada,
+        horarioMarcacao: horarioBrasilia(),
+        dataHoraMarcacao: dataHoraBrasiliaMySQL(),
+      });
+      const alunosPreparados = prepararAlunosParaConfirmacao(alunos);
 
-    if (result.affectedRows === 0) return res.status(404).json({ erro: "Chamada pendente de hoje não encontrada." });
+      fluxoService.assertPermission(
+        fluxoService.validateCompleteStudentList(parseAlunos(chamadaAtual.alunos), alunosPreparados),
+        409
+      );
+      const totais = contarTotaisFrequencia(alunosPreparados);
 
-    return res.json({ mensagem: "Chamada atualizada com sucesso." });
+      const [result] = await connection.execute(
+        `
+        UPDATE chamadas_diarias
+        SET materia = ?, alunos = ?, total_presentes = ?, total_ausentes = ?, versao = versao + 1
+        WHERE id = ? AND status = 'pendente' AND data_chamada = ? AND versao = ?
+        `,
+        [materia, JSON.stringify(alunos), totais.total_presentes, totais.total_ausentes, chamadaId, dataHoje, chamadaAtual.versao]
+      );
+
+      if (result.affectedRows === 0) {
+        fluxoService.assertPermission(fluxoService.validateCallVersion(null, null), 409);
+      }
+
+      await registrarAuditoria(connection, {
+        chamadaId,
+        usuario: req.usuario,
+        evento: "CHAMADA_EDITADA_PELA_PEDAGOGIA",
+        valoresAnteriores: { materia: chamadaAtual.materia, alunos: parseAlunos(chamadaAtual.alunos), versao: chamadaAtual.versao },
+        valoresNovos: { materia, alunos, versao: Number(chamadaAtual.versao) + 1 },
+      });
+
+      return {
+        versao: Number(chamadaAtual.versao) + 1,
+      };
+    });
+
+    return res.json({
+      mensagem: "Chamada temporária atualizada com sucesso.",
+      versao: resultado.versao,
+    });
   } catch (error) {
+    auditarBloqueioHorario(error, req);
     return next(error);
   }
 }
@@ -854,8 +871,16 @@ function montarMetaLista(totalRegistros, paginaAtual, limite) {
 
 async function responsaveis(req, res, next) {
   try {
-    const { paginaAtual, limite, offset } = normalizarPaginacaoLista(req.query);
-    const busca = String(req.query.busca || "").trim().slice(0, 80);
+    const entrada = (req.method === "POST" ? req.body : req.query) || {};
+
+    if (req.method === "GET" && req.query.busca) {
+      return res.status(400).json({
+        erro: "Use a pesquisa protegida para buscar dados pessoais de responsáveis.",
+      });
+    }
+
+    const { paginaAtual, limite, offset } = normalizarPaginacaoLista(entrada);
+    const busca = String(entrada.busca || "").trim().slice(0, 80);
     const filtros = [];
     const parametros = [];
 
@@ -1153,6 +1178,15 @@ async function solicitarAutomacaoWhatsApp(req, res, next) {
       throw erro;
     }
 
+    const configFluxo = await garantirConfiguracao(connection);
+    const [[confirmadasHoje]] = await connection.execute(
+      "SELECT COUNT(*) AS total FROM registros_chamadas_confirmadas WHERE data_chamada = ?",
+      [dataBrasiliaISO()]
+    );
+    fluxoService.assertPermission(
+      fluxoService.canStartAutomation(configFluxo, Number(confirmadasHoje.total || 0) > 0)
+    );
+
     const maquinaDestino = resolverMaquinaDestinoSemBalanceamento(
       usuario,
       req.body.maquinaDestino || req.body.maquina_destino
@@ -1167,9 +1201,7 @@ async function solicitarAutomacaoWhatsApp(req, res, next) {
 
     return res.status(201).json({
       mensagem: `Solicitação de automação registrada para a máquina ${maquinaDestino}.`,
-      automacao: {
-        ...automacaoCriada,
-      },
+      automacao: serializarStatusAutomacao(automacaoCriada),
     });
   } catch (error) {
     if (transacaoIniciada && connection) {
@@ -1193,17 +1225,7 @@ async function consultarStatusAutomacaoWhatsApp(req, res, next) {
       `
       SELECT
         id,
-        usuario_solicitante_id,
-        usuario_solicitante_nome,
-        maquina_destino,
-        tipo_automacao,
         status,
-        lock_owner,
-        lock_adquirido_em,
-        data_solicitacao,
-        iniciado_em,
-        concluido_em,
-        tentativas,
         erro
       FROM fila_automacao
       WHERE id = ?
@@ -1217,7 +1239,7 @@ async function consultarStatusAutomacaoWhatsApp(req, res, next) {
       return res.status(404).json({ erro: "Solicitação de automação não encontrada." });
     }
 
-    return res.json({ automacao: sanitizarAutomacao(rows[0]) });
+    return res.json({ automacao: serializarStatusAutomacao(rows[0]) });
   } catch (error) {
     return next(error);
   }
@@ -1310,4 +1332,3 @@ module.exports = {
   obterMensagemWhatsApp,
   salvarMensagemWhatsApp,
 };
-
