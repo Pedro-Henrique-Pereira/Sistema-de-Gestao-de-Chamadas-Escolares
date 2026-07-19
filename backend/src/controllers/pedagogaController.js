@@ -19,7 +19,7 @@ const MENSAGEM_WHATSAPP_PADRAO = "Prezado(a) {nome_responsavel}, informamos que 
 const TAGS_MENSAGEM_WHATSAPP = ["{nome_responsavel}", "{nome_aluno}", "{data}"];
 
 function auditarBloqueioHorario(error, req) {
-  if (error?.message !== fluxoService.MENSAGENS.HORARIO_ENCERRADO) return;
+  if (![fluxoService.MENSAGENS.HORARIO_ENCERRADO, fluxoService.MENSAGENS.ATRASO_FORA_DO_HORARIO].includes(error?.message)) return;
   registrarAuditoria(db, {
     chamadaId: Number(req.params.id),
     usuario: req.usuario,
@@ -212,7 +212,7 @@ async function chamadasDoDia(req, res, next) {
     return res.json({
       chamadas: rows.map((chamada) => ({
         ...chamada,
-        status_fluxo: fluxoService.statusEfetivo(chamada, config),
+        status_fluxo: fluxoService.statusEfetivo(chamada, config, req.usuario),
         pode_editar: fluxoService.canPedagogueEditCall(chamada, req.usuario, config).permitido,
         pode_confirmar: fluxoService.canConfirmCall(chamada, req.usuario, config).permitido,
         alunos: parseAlunos(chamada.alunos),
@@ -255,7 +255,7 @@ async function chamadasConfirmadasHoje(req, res, next) {
     return res.json({
       chamadas: rows.map((chamada) => ({
         ...chamada,
-        status_fluxo: fluxoService.statusEfetivo(chamada, config),
+        status_fluxo: fluxoService.statusEfetivo(chamada, config, req.usuario),
         pode_editar: Boolean(chamada.chamada_diaria_id_origem && chamada.versao_chamada) && fluxoService.canPedagogueEditCall(chamada, req.usuario, config).permitido,
       })),
       automacao_liberada: fluxoService.canStartAutomation(config, rows.length > 0).permitido,
@@ -313,7 +313,7 @@ async function detalharChamadaConfirmada(req, res, next) {
     return res.json({
       chamada: {
         ...chamada,
-        status_fluxo: fluxoService.statusEfetivo(chamada, config),
+        status_fluxo: fluxoService.statusEfetivo(chamada, config, req.usuario),
         pode_editar: Boolean(chamada.chamada_diaria_id_origem && chamada.versao_chamada) && fluxoService.canPedagogueEditCall(chamada, req.usuario, config).permitido,
         horario_limite_atraso: config.horario_limite_atraso,
         horario_servidor: config.horario_servidor,
@@ -660,7 +660,15 @@ async function atualizarFrequenciaAluno(req, res, next) {
       usuario: req.usuario,
       evento: "CHAMADA_EDITADA_PELA_PEDAGOGIA",
       valoresAnteriores: { aluno_id: frequencia.aluno_id, status: frequencia.status, atrasado: Boolean(frequencia.atrasado), versao: frequencia.chamada_versao },
-      valoresNovos: { aluno_id: frequencia.aluno_id, status, atrasado, atraso_minutos: atrasoMinutos, versao: Number(frequencia.chamada_versao) + 1 },
+      valoresNovos: {
+        aluno_id: frequencia.aluno_id,
+        status,
+        atrasado,
+        atraso_minutos: atrasoMinutos,
+        versao: Number(frequencia.chamada_versao) + 1,
+        edicao_apos_horario: fluxoService.canPedagogueBypassMaximumArrivalTime(configFluxo, req.usuario)
+          && fluxoService.hasMaximumArrivalTimePassed(configFluxo),
+      },
     });
 
     await connection.commit();
@@ -801,6 +809,9 @@ async function atualizarChamada(req, res, next) {
       const configFluxo = await garantirConfiguracao(connection);
       fluxoService.assertPermission(fluxoService.canPedagogueEditCall(chamadaAtual, req.usuario, configFluxo));
       fluxoService.assertPermission(fluxoService.validateCallVersion(chamadaAtual, req.body.versao), 409);
+      fluxoService.assertPermission(
+        fluxoService.canApplyStudentDelays(parseAlunos(chamadaAtual.alunos), req.body.alunos, configFluxo, req.usuario)
+      );
 
       const alunos = montarAlunosJSON(req.body.alunos, {
         horarioChamada: chamadaAtual.horario_chamada,
@@ -833,7 +844,13 @@ async function atualizarChamada(req, res, next) {
         usuario: req.usuario,
         evento: "CHAMADA_EDITADA_PELA_PEDAGOGIA",
         valoresAnteriores: { materia: chamadaAtual.materia, alunos: parseAlunos(chamadaAtual.alunos), versao: chamadaAtual.versao },
-        valoresNovos: { materia, alunos, versao: Number(chamadaAtual.versao) + 1 },
+        valoresNovos: {
+          materia,
+          alunos,
+          versao: Number(chamadaAtual.versao) + 1,
+          edicao_apos_horario: fluxoService.canPedagogueBypassMaximumArrivalTime(configFluxo, req.usuario)
+            && fluxoService.hasMaximumArrivalTimePassed(configFluxo),
+        },
       });
 
       return {

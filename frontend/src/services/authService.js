@@ -18,3 +18,24 @@ export function logout() {
     method: "POST",
   });
 }
+
+export function solicitarRecuperacaoSenha(email) {
+  return apiFetch("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function validarTokenRecuperacao(token) {
+  return apiFetch("/api/auth/reset-password/validate", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
+export function redefinirSenha(token, senha, confirmacaoSenha) {
+  return apiFetch("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, senha, confirmacaoSenha }),
+  });
+}

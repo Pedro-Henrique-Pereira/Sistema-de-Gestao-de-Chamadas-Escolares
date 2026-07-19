@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
+import MetricProgressChart from "../components/MetricProgressChart";
 import { apiDownload, apiFetch } from "../services/api";
 import { dataBrasiliaISO } from "../utils/brasiliaTime";
 import {
@@ -255,7 +256,6 @@ export default function RelatoriosAvancados() {
     atrasos: metricas.presentes ? ((metricas.atrasos / metricas.presentes) * 100).toFixed(1) : "0.0",
   };
 
-  const maiorMetrica = Math.max(metricas.presentes, metricas.ausentes, metricas.justificados, metricas.atrasos, 1);
   const periodoGeradoLabel = PERIODOS_GRAFICO.find((periodo) => periodo.valor === periodoGerado)?.label || "";
 
   function limparAlunoSelecionado() {
@@ -731,27 +731,43 @@ export default function RelatoriosAvancados() {
           <div className="admin-chart-box">
             <h3>Presenças e faltas com suas subcategorias no período</h3>
 
-            <div className="admin-chart annual-chart">
-              <div className="bar-presenca" style={{ height: `${Math.max((metricas.presentes / maiorMetrica) * 100, 12)}%` }}>
-                <span>Presenças</span>
-                <strong>{percentuais.presencas}%</strong>
-              </div>
-
-              <div className="bar-falta" style={{ height: `${Math.max((metricas.ausentes / maiorMetrica) * 100, 12)}%` }}>
-                <span>Ausências</span>
-                <strong>{percentuais.faltas}%</strong>
-              </div>
-
-              <div className="bar-justificada" style={{ height: `${Math.max((metricas.justificados / maiorMetrica) * 100, 12)}%` }}>
-                <span>Justificados nas faltas</span>
-                <strong>{percentuais.justificadas}%</strong>
-              </div>
-
-              <div className="bar-atraso" style={{ height: `${Math.max((metricas.atrasos / maiorMetrica) * 100, 12)}%` }}>
-                <span>Atrasos nas presenças</span>
-                <strong>{percentuais.atrasos}%</strong>
-              </div>
-            </div>
+            <MetricProgressChart
+              ariaLabel="Composição dos indicadores no período"
+              itens={[
+                {
+                  id: "presencas",
+                  rotulo: "Presenças",
+                  valor: percentuais.presencas,
+                  tom: "success",
+                  casasDecimais: 1,
+                  detalhe: `${metricas.presentes} registros`,
+                },
+                {
+                  id: "ausencias",
+                  rotulo: "Ausências",
+                  valor: percentuais.faltas,
+                  tom: "danger",
+                  casasDecimais: 1,
+                  detalhe: `${metricas.ausentes} registros`,
+                },
+                {
+                  id: "justificados",
+                  rotulo: "Justificados nas faltas",
+                  valor: percentuais.justificadas,
+                  tom: "info",
+                  casasDecimais: 1,
+                  detalhe: `${metricas.justificados} registros · percentual das ausências`,
+                },
+                {
+                  id: "atrasos",
+                  rotulo: "Atrasos nas presenças",
+                  valor: percentuais.atrasos,
+                  tom: "warning",
+                  casasDecimais: 1,
+                  detalhe: `${metricas.atrasos} registros · percentual das presenças`,
+                },
+              ]}
+            />
           </div>
 
           <article className="admin-timeline-box">

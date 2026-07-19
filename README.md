@@ -353,6 +353,7 @@ Responsável por:
 | JWT                | Autenticação            |
 | bcrypt             | Hash de Senhas          |
 | express-rate-limit | Proteção contra abuso   |
+| Nodemailer         | Envio SMTP seguro       |
 | trust proxy        | Compatibilidade Railway |
 
 ---
@@ -443,6 +444,7 @@ O sistema implementa:
 * Rate Limiting
 * Trust Proxy configurado para Railway
 * Controle de acesso por perfil
+* Recuperação de senha com token temporário de uso único
 
 ---
 

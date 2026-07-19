@@ -9,6 +9,9 @@ const ENDPOINTS_SEM_NOTIFICACAO_GLOBAL_401 = new Set([
   "/api/auth/dev-users",
   "/api/auth/csrf-token",
   "/api/auth/me",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password/validate",
+  "/api/auth/reset-password",
 ]);
 
 const MENSAGEM_SESSAO_EXPIRADA =
@@ -78,7 +81,9 @@ export class ApiError extends Error {
 
 function deveNotificarSessaoInvalida(endpoint) {
   const caminho = normalizarEndpoint(endpoint);
-  return !ENDPOINTS_SEM_NOTIFICACAO_GLOBAL_401.has(caminho) && window.location.pathname !== "/login";
+  const rotaPublica = ["/login", "/esqueci-minha-senha", "/redefinir-senha"]
+    .includes(window.location.pathname);
+  return !ENDPOINTS_SEM_NOTIFICACAO_GLOBAL_401.has(caminho) && !rotaPublica;
 }
 
 function notificarSessaoInvalida(response, endpoint) {

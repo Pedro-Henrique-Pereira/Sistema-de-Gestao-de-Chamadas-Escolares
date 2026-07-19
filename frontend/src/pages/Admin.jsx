@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { LogOut, Pencil } from "lucide-react";
+import { ChevronDown, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { apiFetch } from "../services/api";
 import { buscarConfiguracaoEscola, salvarConfiguracaoEscola } from "../services/configuracoesEscolaService";
 import RelatoriosAvancados from "./RelatoriosAvancados";
 import MensagensAdmin from "./MensagensAdmin";
 import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
+import MetricProgressChart from "../components/MetricProgressChart";
 import TurmasDashboardCard from "../components/TurmasDashboardCard";
 import { useAuth } from "../context/AuthContext";
 import { ATRASOS_CACHE_NAMESPACE } from "../utils/atrasosSync";
@@ -45,12 +46,22 @@ export default function Administrador() {
   const [pesquisaAluno, setPesquisaAluno] = useState("");
   const [pesquisaAlunoDebounced, setPesquisaAlunoDebounced] = useState("");
   const [paginaAlunos, setPaginaAlunos] = useState(1);
-  const [metaAlunos, setMetaAlunos] = useState({ totalRegistros: 0, paginaAtual: 1, totalPaginas: 1, limite: 50 });
+  const [metaAlunos, setMetaAlunos] = useState({
+    totalRegistros: 0,
+    totalPagina: 0,
+    turmasPagina: 0,
+    paginaAtual: 1,
+    totalPaginas: 1,
+    limite: 50,
+    paginacaoPorTurma: false,
+  });
   const [turmasAbertas, setTurmasAbertas] = useState({});
   const [alunosAbertos, setAlunosAbertos] = useState({});
   const [alunoDestacadoId, setAlunoDestacadoId] = useState(null);
   const primeiraBuscaAplicadaRef = useRef(false);
   const linhaAlunoRefs = useRef({});
+  const registrosPanelRef = useRef(null);
+  const paginaSolicitadaRef = useRef(null);
   const cacheRef = useRef({
     dashboardCarregado: false,
     configAtrasoCarregada: false,
@@ -95,6 +106,10 @@ export default function Administrador() {
   const [mensagemConfig, setMensagemConfig] = useState("");
   const [horarioLimiteAtraso, setHorarioLimiteAtraso] = useState("07:45");
   const [tempoMaximoJustificativasMeses, setTempoMaximoJustificativasMeses] = useState(1);
+  const [bloqueioEdicaoAposHorario, setBloqueioEdicaoAposHorario] = useState(true);
+  const [bloqueioEdicaoSalvo, setBloqueioEdicaoSalvo] = useState(true);
+  const [salvandoBloqueioEdicao, setSalvandoBloqueioEdicao] = useState(false);
+  const [feedbackBloqueioEdicao, setFeedbackBloqueioEdicao] = useState({ tipo: "", mensagem: "" });
 
   function montarChaveCacheAlunos(page = paginaAlunos, busca = pesquisaAlunoDebounced) {
     return `alunos:${page}:${String(busca || "").trim().toLowerCase()}`;
@@ -106,7 +121,17 @@ export default function Administrador() {
 
     if (!forcarAtualizacao && cacheAlunos[chaveCache]) {
       setAlunos(cacheAlunos[chaveCache].alunos || []);
-      setMetaAlunos(cacheAlunos[chaveCache].meta || { totalRegistros: 0, paginaAtual: page, totalPaginas: 1, limite: 50 });
+      const metaCache = cacheAlunos[chaveCache].meta || {
+        totalRegistros: 0,
+        totalPagina: 0,
+        turmasPagina: 0,
+        paginaAtual: page,
+        totalPaginas: 1,
+        limite: 50,
+        paginacaoPorTurma: false,
+      };
+      setMetaAlunos(metaCache);
+      sinalizarPaginaCarregada(metaCache.paginaAtual);
       return cacheAlunos[chaveCache];
     }
 
@@ -116,18 +141,22 @@ export default function Administrador() {
     try {
       const data = await apiFetch("/api/registros/alunos/pesquisar", {
         method: "POST",
-        body: JSON.stringify({ page, limit: 50, busca }),
+        body: JSON.stringify({ page, limit: 50, busca, preservarTurmas: true }),
       });
       const alunosPagina = data.alunos || data.dados || [];
       const meta = {
         totalRegistros: Number(data.totalRegistros || alunosPagina.length || 0),
+        totalPagina: Number(data.totalPagina ?? alunosPagina.length),
+        turmasPagina: Number(data.turmasPagina || 0),
         paginaAtual: Number(data.paginaAtual || page),
         totalPaginas: Number(data.totalPaginas || 1),
         limite: Number(data.limite || 50),
+        paginacaoPorTurma: Boolean(data.paginacaoPorTurma),
       };
 
       setAlunos(alunosPagina);
       setMetaAlunos(meta);
+      sinalizarPaginaCarregada(meta.paginaAtual);
       cacheRef.current.paginasAlunos = {
         ...(cacheRef.current.paginasAlunos || {}),
         [chaveCache]: { alunos: alunosPagina, meta },
@@ -139,6 +168,15 @@ export default function Administrador() {
     } finally {
       setCarregandoRegistros(false);
     }
+  }
+
+  function sinalizarPaginaCarregada(paginaCarregada) {
+    if (paginaSolicitadaRef.current !== paginaCarregada) return;
+
+    paginaSolicitadaRef.current = null;
+    window.setTimeout(() => {
+      registrosPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   }
 
   async function carregarRegistrosCompletos({ forcarAtualizacao = false } = {}) {
@@ -191,6 +229,11 @@ export default function Administrador() {
       const data = await buscarConfiguracaoEscola();
       setHorarioLimiteAtraso(String(data.horarioLimiteAtraso || data.horario_limite_atraso || "07:45").slice(0, 5));
       setTempoMaximoJustificativasMeses(Number(data.tempoMaximoJustificativasMeses || data.tempo_maximo_justificativas_meses || 1));
+      const bloqueioAtivado = data.bloquearEdicaoChamadasAposHorario
+        ?? data.bloquear_edicao_chamadas_apos_horario
+        ?? true;
+      setBloqueioEdicaoAposHorario(Boolean(bloqueioAtivado));
+      setBloqueioEdicaoSalvo(Boolean(bloqueioAtivado));
     } catch (error) {
       registrarErroCliente("admin.carregarConfiguracao", error);
     }
@@ -292,6 +335,38 @@ export default function Administrador() {
     }
   }
 
+  async function handleSalvarBloqueioEdicao(event) {
+    event.preventDefault();
+    if (salvandoBloqueioEdicao) return;
+
+    setSalvandoBloqueioEdicao(true);
+    setFeedbackBloqueioEdicao({ tipo: "", mensagem: "" });
+
+    try {
+      const data = await salvarConfiguracaoEscola({
+        bloquear_edicao_chamadas_apos_horario: bloqueioEdicaoAposHorario,
+      });
+      const valorPersistido = data.bloquearEdicaoChamadasAposHorario
+        ?? data.bloquear_edicao_chamadas_apos_horario
+        ?? true;
+      setBloqueioEdicaoAposHorario(Boolean(valorPersistido));
+      setBloqueioEdicaoSalvo(Boolean(valorPersistido));
+      setFeedbackBloqueioEdicao({
+        tipo: "sucesso",
+        mensagem: `Bloqueio ${valorPersistido ? "ativado" : "desativado"} com sucesso.`,
+      });
+      cacheRef.current.configAtrasoCarregada = true;
+    } catch (error) {
+      setBloqueioEdicaoAposHorario(bloqueioEdicaoSalvo);
+      setFeedbackBloqueioEdicao({
+        tipo: "erro",
+        mensagem: error.message || "Não foi possível salvar a configuração de bloqueio.",
+      });
+    } finally {
+      setSalvandoBloqueioEdicao(false);
+    }
+  }
+
   useEffect(() => {
     async function iniciarPagina() {
       try {
@@ -371,15 +446,13 @@ const pesquisaAlunoAtiva = useMemo(
 const alunosFiltrados = useMemo(() => alunos, [alunos]);
 
 const alunosPorTurma = useMemo(() => {
-  const grupos = turmas.map((turma) => ({
-    ...turma,
-    alunos: alunosFiltrados.filter((aluno) => aluno.turma === turma.nome),
-  }));
-
-  if (!pesquisaAlunoAtiva) return grupos;
-
-  return grupos.filter((turma) => turma.alunos.length > 0);
-}, [turmas, alunosFiltrados, pesquisaAlunoAtiva]);
+  return turmas
+    .map((turma) => ({
+      ...turma,
+      alunos: alunosFiltrados.filter((aluno) => aluno.turma === turma.nome),
+    }))
+    .filter((turma) => turma.alunos.length > 0);
+}, [turmas, alunosFiltrados]);
 
 const alunosSemTurma = useMemo(
   () => alunosFiltrados.filter((aluno) => !aluno.turma),
@@ -484,6 +557,21 @@ function toggleAluno(idAluno) {
     ...prev,
     [idAluno]: !prev[idAluno],
   }));
+}
+
+function trocarPaginaAlunos(paginaDestino) {
+  const paginaSegura = Math.min(
+    Math.max(Number(paginaDestino) || 1, 1),
+    Math.max(metaAlunos.totalPaginas, 1)
+  );
+
+  if (carregandoRegistros || paginaSegura === metaAlunos.paginaAtual) return;
+
+  paginaSolicitadaRef.current = paginaSegura;
+  setTurmasAbertas({});
+  setAlunosAbertos({});
+  setAlunoDestacadoId(null);
+  setPaginaAlunos(paginaSegura);
 }
 
 
@@ -857,11 +945,12 @@ async function handleRemoverEquipe(idPessoa) {
             className="admin-menu-toggle"
             onClick={() => setSidebarOpen(true)}
             type="button"
+            aria-label="Abrir menu de navegação"
           >
             ☰
           </button>
 
-          <div>
+          <div className="admin-topbar-title">
             <p>Sistema de Gestão Escolar</p>
             <h1>Ambiente Administrativo</h1>
           </div>
@@ -924,12 +1013,12 @@ async function handleRemoverEquipe(idPessoa) {
                     <strong>{metricasDia.alunosCadastrados}</strong>
                   </article>
 
-                  <article className="admin-card">
+                  <article className="admin-card admin-card-mobile-secondary">
                     <span>Chamadas hoje</span>
                     <strong>{metricasDia.chamadasHoje}</strong>
                   </article>
 
-                  <article className="admin-card">
+                  <article className="admin-card admin-card-mobile-secondary">
                     <span>Chamadas pendentes</span>
                     <strong>{metricasDia.chamadasPendentes}</strong>
                   </article>
@@ -944,7 +1033,7 @@ async function handleRemoverEquipe(idPessoa) {
                     <strong>{metricasDia.ausentes}</strong>
                   </article>
 
-                  <article className="admin-card">
+                  <article className="admin-card admin-card-mobile-secondary">
                     <span>Justificados</span>
                     <strong>{metricasDia.justificados}</strong>
                     <small>Incluídos nas ausências</small>
@@ -956,7 +1045,7 @@ async function handleRemoverEquipe(idPessoa) {
                     <small>Incluídos nas presenças</small>
                   </article>
 
-                  <article className="admin-card">
+                  <article className="admin-card admin-card-mobile-secondary">
                     <span>Taxa de frequência</span>
                     <strong>{metricasDia.taxaFrequencia}%</strong>
                   </article>
@@ -1001,47 +1090,27 @@ async function handleRemoverEquipe(idPessoa) {
                 <div className="chart-card">
                   <h3>Indicadores e composição diária</h3>
 
-                  <div className="chart-bars">
-                    <div>
-                      <div
-                        className="bar green"
-                        style={{ height: `${porcentagemPresenca * 2.5}px` }}
-                      >
-                        {porcentagemPresenca}%
-                      </div>
-                      <span>Presenças</span>
-                    </div>
-
-                    <div>
-                      <div
-                        className="bar red"
-                        style={{ height: `${porcentagemAusencia * 2.5}px` }}
-                      >
-                        {porcentagemAusencia}%
-                      </div>
-                      <span>Ausências</span>
-                    </div>
-
-                    <div>
-                      <div
-                        className="bar blue"
-                        style={{ height: `${porcentagemJustificada * 2.5}px` }}
-                      >
-                        {porcentagemJustificada}%
-                      </div>
-                      <span>Justificados nas ausências</span>
-                    </div>
-
-                    <div>
-                      <div
-                        className="bar yellow"
-                        style={{ height: `${porcentagemAtraso * 2.5}px` }}
-                      >
-                        {porcentagemAtraso}%
-                      </div>
-                      <span>Atrasos nas presenças</span>
-                    </div>
-                  </div>
+                  <MetricProgressChart
+                    ariaLabel="Composição dos indicadores diários"
+                    itens={[
+                      { id: "presencas", rotulo: "Presenças", valor: porcentagemPresenca, tom: "success" },
+                      { id: "ausencias", rotulo: "Ausências", valor: porcentagemAusencia, tom: "danger" },
+                      {
+                        id: "justificados",
+                        rotulo: "Justificados",
+                        valor: porcentagemJustificada,
+                        tom: "info",
+                        detalhe: "Percentual dentro das ausências",
+                      },
+                      {
+                        id: "atrasos",
+                        rotulo: "Atrasos",
+                        valor: porcentagemAtraso,
+                        tom: "warning",
+                        detalhe: "Percentual dentro das presenças",
+                      },
+                    ]}
+                  />
                 </div>
               </>
             ) : (
@@ -1093,7 +1162,7 @@ async function handleRemoverEquipe(idPessoa) {
             </div>
 
             {abaRegistros === "alunos" && (
-              <div className="admin-panel">
+              <div className="admin-panel" ref={registrosPanelRef}>
                 <div className="admin-panel-header">
                   <h3>Alunos e responsáveis</h3>
 
@@ -1368,41 +1437,53 @@ async function handleRemoverEquipe(idPessoa) {
                   ))}
                 </div>
 
-                <div className="admin-pagination">
+                <div className="admin-pagination" aria-label="Paginação de alunos">
                   <button
-                    className="admin-secondary-btn"
+                    className="admin-secondary-btn admin-pagination-previous"
                     type="button"
                     disabled={carregandoRegistros || metaAlunos.paginaAtual <= 1}
-                    onClick={() => setPaginaAlunos((pagina) => Math.max(pagina - 1, 1))}
+                    onClick={() => trocarPaginaAlunos(metaAlunos.paginaAtual - 1)}
                   >
-                    Anterior
+                    ← Anterior
                   </button>
-                  <span>
-                    Página {metaAlunos.paginaAtual} de {metaAlunos.totalPaginas} — {metaAlunos.totalRegistros} registro(s)
-                  </span>
+                  <div className="admin-pagination-status" role="status" aria-live="polite">
+                    <strong>
+                      {carregandoRegistros
+                        ? "Carregando página…"
+                        : `Página ${metaAlunos.paginaAtual} de ${metaAlunos.totalPaginas}`}
+                    </strong>
+                    <span>
+                      Exibindo {metaAlunos.totalPagina} de {metaAlunos.totalRegistros} aluno(s)
+                    </span>
+                    {metaAlunos.paginacaoPorTurma && (
+                      <small>
+                        {metaAlunos.turmasPagina} grupo(s) completo(s) nesta página
+                      </small>
+                    )}
+                  </div>
                   <button
-                    className="admin-secondary-btn"
+                    className="admin-primary-btn admin-pagination-next"
                     type="button"
                     disabled={carregandoRegistros || metaAlunos.paginaAtual >= metaAlunos.totalPaginas}
-                    onClick={() => setPaginaAlunos((pagina) => Math.min(pagina + 1, metaAlunos.totalPaginas))}
+                    onClick={() => trocarPaginaAlunos(metaAlunos.paginaAtual + 1)}
                   >
-                    Próxima
+                    Próxima →
                   </button>
                 </div>
               </div>
             )}
 
             {abaRegistros === "turmas" && (
-              <div className="admin-panel">
+              <div className="admin-panel admin-turmas-panel">
                 <div className="admin-panel-header">
                   <h3>Gestão de turmas</h3>
 
                   <button
-                    className="admin-primary-btn"
+                    className="admin-primary-btn admin-create-btn"
                     type="button"
                     onClick={() => setModalTurma({ tipo: "cadastrar", turma: null })}
                   >
-                    + Nova turma
+                    <Plus size={17} aria-hidden="true" /> Nova turma
                   </button>
                 </div>
 
@@ -1414,32 +1495,39 @@ async function handleRemoverEquipe(idPessoa) {
                     );
 
                     return (
-                      <div className="admin-accordion" key={turma.id}>
+                      <div className="admin-accordion admin-turma-card" key={turma.id}>
+                        <div className="admin-turma-row">
                         <button
-                          className="admin-accordion-header"
+                          className="admin-turma-toggle"
                           type="button"
                           onClick={() => toggleTurma(`gestao-${turma.nome}`)}
+                          aria-expanded={Boolean(turmasAbertas[`gestao-${turma.nome}`])}
                         >
-                          <strong>{turma.nome}</strong>
+                          <span className="admin-turma-identity">
+                            <strong>{turma.nome}</strong>
+                            <small>Visualizar alunos vinculados</small>
+                          </span>
+                          <ChevronDown
+                            className={turmasAbertas[`gestao-${turma.nome}`] ? "rotated" : ""}
+                            size={19}
+                            aria-hidden="true"
+                          />
+                        </button>
 
-                          <span className="admin-accordion-actions">
+                          <div className="admin-accordion-actions">
                             <button
-                              className="admin-primary-btn"
+                              className="admin-primary-btn admin-action-btn"
                               type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setModalTurma({ tipo: "editar", turma });
-                              }}
+                              onClick={() => setModalTurma({ tipo: "editar", turma })}
                               title="Editar turma"
                             >
-                              <Pencil size={15} /> Editar
+                              <Pencil size={16} aria-hidden="true" /> Editar
                             </button>
 
                             <button
-                              className="admin-danger-btn"
+                              className="admin-danger-btn admin-action-btn"
                               type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
+                              onClick={() => {
                                 setConfirmacao({
                                   tipo: "removerTurma",
                                   id: turma.id,
@@ -1448,14 +1536,10 @@ async function handleRemoverEquipe(idPessoa) {
                                 });
                               }}
                             >
-                              Remover registro
+                              <Trash2 size={16} aria-hidden="true" /> Remover
                             </button>
-
-                            <span>
-                              {turmasAbertas[`gestao-${turma.nome}`] ? "−" : "+"}
-                            </span>
-                          </span>
-                        </button>
+                          </div>
+                        </div>
 
                         {turmasAbertas[`gestao-${turma.nome}`] && (
                           <div className="admin-accordion-content">
@@ -1478,16 +1562,16 @@ async function handleRemoverEquipe(idPessoa) {
             )}
 
             {abaRegistros === "equipe" && (
-              <div className="admin-panel">
+              <div className="admin-panel admin-team-panel">
                 <div className="admin-panel-header">
                   <h3>Equipe escolar</h3>
 
                   <button
-                    className="admin-primary-btn"
+                    className="admin-primary-btn admin-create-btn"
                     type="button"
                     onClick={() => setModalEquipe({ tipo: "cadastrar", pessoa: null })}
                   >
-                    + Nova conta
+                    <Plus size={17} aria-hidden="true" /> Nova conta
                   </button>
                 </div>
 
@@ -1497,13 +1581,13 @@ async function handleRemoverEquipe(idPessoa) {
                   );
 
                   return (
-                    <div className="admin-panel" key={categoria.cargo}>
+                    <div className="admin-panel admin-team-category" key={categoria.cargo}>
                       <div className="admin-panel-header">
                         <h3>{categoria.titulo}</h3>
                       </div>
 
-                      <div className="admin-table-wrapper">
-                        <table>
+                      <div className="admin-table-wrapper admin-team-table-wrapper">
+                        <table className="admin-team-table">
                           <thead>
                             <tr>
                               <th>Nome completo</th>
@@ -1517,9 +1601,9 @@ async function handleRemoverEquipe(idPessoa) {
                           <tbody>
                             {pessoas.map((pessoa) => (
                               <tr key={pessoa.id}>
-                                <td>{pessoa.nome}</td>
-                                <td>{pessoa.cargo}</td>
-                                <td>
+                                <td data-label="Nome completo">{pessoa.nome}</td>
+                                <td data-label="Cargo">{pessoa.cargo}</td>
+                                <td data-label="Status">
                                   <span
                                     className={`admin-status ${
                                       pessoa.status === "Ativo" ? "ativo" : "inativo"
@@ -1528,10 +1612,11 @@ async function handleRemoverEquipe(idPessoa) {
                                     {pessoa.status}
                                   </span>
                                 </td>
-                                <td>{pessoa.email}</td>
-                                <td>
+                                <td data-label="E-mail" className="admin-team-email">{pessoa.email}</td>
+                                <td data-label="Ações" className="admin-team-actions">
+                                  <div className="admin-record-actions">
                                   <button
-                                    className="admin-primary-btn"
+                                    className="admin-primary-btn admin-action-btn"
                                     type="button"
                                     onClick={() =>
                                       setModalEquipe({
@@ -1540,11 +1625,11 @@ async function handleRemoverEquipe(idPessoa) {
                                       })
                                     }
                                   >
-                                    Editar dados
+                                    <Pencil size={16} aria-hidden="true" /> Editar
                                   </button>
 
                                   <button
-                                    className="admin-danger-btn"
+                                    className="admin-danger-btn admin-action-btn"
                                     type="button"
                                     onClick={() =>
                                       setConfirmacao({
@@ -1555,15 +1640,16 @@ async function handleRemoverEquipe(idPessoa) {
                                       })
                                     }
                                   >
-                                    Remover registro
+                                    <Trash2 size={16} aria-hidden="true" /> Remover
                                   </button>
+                                  </div>
                                 </td>
                               </tr>
                             ))}
 
                             {pessoas.length === 0 && (
                               <tr>
-                                <td colSpan="5">Nenhum registro encontrado.</td>
+                                <td className="admin-team-empty" colSpan="5">Nenhum registro encontrado.</td>
                               </tr>
                             )}
                           </tbody>
@@ -1904,9 +1990,58 @@ async function handleRemoverEquipe(idPessoa) {
         {telaAtiva === "configuracoes" && (
           <section className="admin-section">
             <div className="admin-title-box">
-              <h2>Configurações da conta administrativa</h2>
-              <p>Atualize os dados cadastrais da conta administrativa em uso.</p>
+              <h2>Configurações administrativas</h2>
+              <p>Gerencie regras institucionais e os dados cadastrais da conta administrativa em uso.</p>
             </div>
+
+            <form className="admin-policy-card" onSubmit={handleSalvarBloqueioEdicao}>
+              <div className="admin-policy-copy">
+                <span className="admin-policy-eyebrow">Controle pedagógico</span>
+                <h3>Bloquear edição de chamadas após o horário máximo de chegada</h3>
+                <p>
+                  Quando ativado, as pedagogas não poderão editar chamadas nem marcar alunos como atrasados após o horário máximo de chegada. Quando desativado, poderão continuar realizando apenas as alterações já autorizadas para o perfil.
+                </p>
+              </div>
+
+              <div className="admin-policy-control">
+                <span className={`admin-policy-state ${bloqueioEdicaoAposHorario ? "is-active" : "is-inactive"}`}>
+                  {bloqueioEdicaoAposHorario ? "Ativado" : "Desativado"}
+                </span>
+                <button
+                  className={`admin-config-switch ${bloqueioEdicaoAposHorario ? "is-on" : ""}`}
+                  type="button"
+                  role="switch"
+                  aria-checked={bloqueioEdicaoAposHorario}
+                  aria-label="Bloquear edição de chamadas após o horário máximo de chegada"
+                  disabled={salvandoBloqueioEdicao}
+                  onClick={() => {
+                    setBloqueioEdicaoAposHorario((valorAtual) => !valorAtual);
+                    setFeedbackBloqueioEdicao({ tipo: "", mensagem: "" });
+                  }}
+                >
+                  <span aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="admin-policy-actions">
+                <button
+                  className="admin-primary-btn"
+                  type="submit"
+                  disabled={salvandoBloqueioEdicao || bloqueioEdicaoAposHorario === bloqueioEdicaoSalvo}
+                >
+                  {salvandoBloqueioEdicao ? "Salvando..." : "Salvar configuração"}
+                </button>
+                {feedbackBloqueioEdicao.mensagem && (
+                  <p
+                    className={`admin-policy-feedback ${feedbackBloqueioEdicao.tipo}`}
+                    role={feedbackBloqueioEdicao.tipo === "erro" ? "alert" : "status"}
+                    aria-live="polite"
+                  >
+                    {feedbackBloqueioEdicao.mensagem}
+                  </p>
+                )}
+              </div>
+            </form>
 
             <form className="admin-config-form" onSubmit={handleSalvarConfiguracoes}>
               <label>

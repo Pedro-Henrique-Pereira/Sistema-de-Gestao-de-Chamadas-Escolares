@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
 import { API_URL, apiFetch } from "../services/api";
 import { login } from "../services/authService";
@@ -9,6 +9,7 @@ import "../styles/Login.css";
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { definirUsuarioAutenticado } = useAuth();
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
@@ -17,6 +18,7 @@ export default function Login() {
   const [carregando, setCarregando] = useState(false);
   const [usuariosDev, setUsuariosDev] = useState([]);
   const [carregandoDev, setCarregandoDev] = useState(false);
+  const mensagemSucesso = location.state?.mensagemSucesso || "";
 
 
   function hostEhLocalhost(hostname) {
@@ -140,8 +142,14 @@ export default function Login() {
         >
 
           {erro && (
-            <div className="login-error">
+            <div className="login-error" role="alert">
               {erro}
+            </div>
+          )}
+
+          {mensagemSucesso && !erro && (
+            <div className="login-success" role="status">
+              {mensagemSucesso}
             </div>
           )}
 
@@ -221,6 +229,10 @@ export default function Login() {
               </button>
 
             </div>
+          </div>
+
+          <div className="login-form-links">
+            <Link to="/esqueci-minha-senha">Esqueci minha senha</Link>
           </div>
 
           <button

@@ -87,6 +87,7 @@ async function listarAlunos(req, res, next) {
       page: entrada.page,
       limit: entrada.limit,
       busca: entrada.busca,
+      preservarTurmas: entrada.preservarTurmas === true || entrada.preservarTurmas === 'true',
     });
 
     res.json(resultado);

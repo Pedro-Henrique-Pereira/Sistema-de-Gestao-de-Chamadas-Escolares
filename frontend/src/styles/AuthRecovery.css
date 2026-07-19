@@ -1,0 +1,299 @@
+.auth-recovery-page {
+  --auth-blue: #2563eb;
+  --auth-green: #16a34a;
+  --auth-ink: #0f172a;
+  --auth-muted: #64748b;
+  width: 100%;
+  min-height: 100vh;
+  padding: 24px 18px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(37, 99, 235, 0.18), transparent 28%),
+    radial-gradient(circle at 86% 86%, rgba(22, 163, 74, 0.14), transparent 30%),
+    linear-gradient(145deg, #eef4ff 0%, #f8fafc 52%, #eef9f3 100%);
+  color: var(--auth-ink);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.auth-recovery-card {
+  width: min(100%, 460px);
+  padding: 32px;
+  border: 1px solid rgba(203, 213, 225, 0.82);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.auth-recovery-mark {
+  width: 62px;
+  height: 62px;
+  margin-bottom: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--auth-blue), var(--auth-green));
+  color: #ffffff;
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.24);
+}
+
+.auth-recovery-mark--warning {
+  margin-inline: auto;
+  background: linear-gradient(135deg, #f97316, #dc2626);
+}
+
+.auth-recovery-header {
+  margin-bottom: 24px;
+}
+
+.auth-recovery-eyebrow {
+  margin: 0 0 6px;
+  color: var(--auth-blue);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.auth-recovery-header h1,
+.auth-recovery-card--state h1 {
+  margin: 0;
+  color: var(--auth-ink);
+  font-size: clamp(1.65rem, 6vw, 2rem);
+  line-height: 1.14;
+  letter-spacing: -0.045em;
+}
+
+.auth-recovery-header p,
+.auth-recovery-card--state p {
+  margin: 10px 0 0;
+  color: var(--auth-muted);
+  font-size: 0.94rem;
+  line-height: 1.6;
+}
+
+.auth-recovery-form {
+  display: grid;
+  gap: 18px;
+}
+
+.auth-recovery-status:empty {
+  display: none;
+}
+
+.auth-recovery-alert {
+  padding: 13px 14px;
+  border: 1px solid;
+  border-radius: 14px;
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.auth-recovery-alert--error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.auth-recovery-alert--success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.auth-recovery-field {
+  display: grid;
+  gap: 8px;
+  color: #334155;
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.auth-recovery-input {
+  position: relative;
+  display: block;
+}
+
+.auth-recovery-input > svg {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  z-index: 1;
+  transform: translateY(-50%);
+  color: #64748b;
+  pointer-events: none;
+}
+
+.auth-recovery-input input {
+  width: 100%;
+  min-height: 54px;
+  padding: 0 48px;
+  border: 1.5px solid #dbe3ef;
+  border-radius: 17px;
+  outline: none;
+  background: #f8fafc;
+  color: var(--auth-ink);
+  font: inherit;
+  font-weight: 550;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.auth-recovery-input input:focus {
+  border-color: var(--auth-blue);
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.auth-recovery-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.auth-recovery-toggle:hover {
+  background: #e2e8f0;
+  color: var(--auth-ink);
+}
+
+.auth-recovery-primary {
+  width: 100%;
+  min-height: 54px;
+  padding: 0 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 17px;
+  background: linear-gradient(135deg, var(--auth-blue), #1d4ed8);
+  box-shadow: 0 14px 26px rgba(37, 99, 235, 0.24);
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: none;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.auth-recovery-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 30px rgba(37, 99, 235, 0.3);
+}
+
+.auth-recovery-primary:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.auth-recovery-back {
+  width: fit-content;
+  margin: 22px auto 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #475569;
+  font-size: 0.88rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.auth-recovery-back:hover {
+  color: var(--auth-blue);
+}
+
+.auth-recovery-requirements {
+  margin: -2px 0 0;
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+  border-radius: 14px;
+  background: #f8fafc;
+  list-style: none;
+}
+
+.auth-recovery-requirements li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.auth-recovery-requirements li svg {
+  color: #94a3b8;
+}
+
+.auth-recovery-requirements li.is-valid {
+  color: #166534;
+}
+
+.auth-recovery-requirements li.is-valid svg {
+  color: #16a34a;
+}
+
+.auth-recovery-card--state {
+  text-align: center;
+}
+
+.auth-recovery-card--state .auth-recovery-primary {
+  margin-top: 24px;
+}
+
+.auth-recovery-spinner {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 22px;
+  border: 4px solid #dbeafe;
+  border-top-color: var(--auth-blue);
+  border-radius: 50%;
+  animation: auth-recovery-spin 0.75s linear infinite;
+}
+
+.auth-recovery-primary:focus-visible,
+.auth-recovery-back:focus-visible,
+.auth-recovery-toggle:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.42);
+  outline-offset: 3px;
+}
+
+@keyframes auth-recovery-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 520px) {
+  .auth-recovery-page {
+    padding: 16px 12px;
+    place-items: start center;
+  }
+
+  .auth-recovery-card {
+    margin-top: 16px;
+    padding: 26px 20px;
+    border-radius: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-recovery-spinner {
+    animation-duration: 1.8s;
+  }
+
+  .auth-recovery-primary {
+    transition: none;
+  }
+}

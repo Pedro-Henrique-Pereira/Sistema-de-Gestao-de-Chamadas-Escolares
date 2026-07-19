@@ -1,6 +1,7 @@
 const db = require("../database/db");
 const { garantirConfiguracao } = require("../controllers/configuracoesEscolaController");
 const { safeLogError } = require("../utils/errorHandler");
+const passwordResetModel = require("../models/passwordResetModel");
 
 const UM_DIA_EM_MS = 24 * 60 * 60 * 1000;
 
@@ -34,6 +35,7 @@ async function executarLimpezaAutomatica() {
     const [resultadoChamadas] = await connection.execute(
       "DELETE FROM chamadas_diarias WHERE status = 'cancelada' AND data_chamada < DATE_SUB(CURDATE(), INTERVAL 30 DAY)"
     );
+    const tokensRecuperacaoRemovidos = await passwordResetModel.limparTokensAntigos(connection);
 
     await connection.commit();
 
@@ -41,6 +43,7 @@ async function executarLimpezaAutomatica() {
       chamadasDiariasRemovidas: resultadoChamadas.affectedRows || 0,
       controleEnviosRemovidos: resultadoControleEnvios.affectedRows || 0,
       justificativasRemovidas: resultadoJustificativas.affectedRows || 0,
+      tokensRecuperacaoRemovidos,
       mesesRetencaoJustificativas: mesesRetencao,
       executadoEm: new Date().toISOString(),
     };

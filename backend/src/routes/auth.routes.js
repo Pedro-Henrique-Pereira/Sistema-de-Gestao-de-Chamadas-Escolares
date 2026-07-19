@@ -3,6 +3,7 @@ const router = express.Router();
 const rateLimit = require("express-rate-limit");
 
 const authController = require("../controllers/authController");
+const passwordResetController = require("../controllers/passwordResetController");
 const { getCsrfToken } = require("../middlewares/csrfMiddleware");
 const { autenticar } = require("../middlewares/authMiddleware");
 const { formatarEmail } = require("../utils/formatadores");
@@ -21,6 +22,59 @@ function gerarChaveLogin(req) {
 
   return `login:${ipCliente}:${email}`;
 }
+
+function hashIdentificador(valor) {
+  return require("crypto")
+    .createHash("sha256")
+    .update(String(valor || ""), "utf8")
+    .digest("hex");
+}
+
+const mensagemRecuperacaoGenerica = {
+  erro: "Não foi possível processar novas solicitações agora. Aguarde alguns minutos e tente novamente.",
+};
+
+const recuperacaoPorIpLimiter = rateLimit({
+  windowMs: Number(process.env.PASSWORD_RESET_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+  limit: Number(process.env.PASSWORD_RESET_IP_RATE_LIMIT_MAX || 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `forgot-ip:${normalizarIpCliente(req)}`,
+  message: mensagemRecuperacaoGenerica,
+});
+
+const recuperacaoPorEmailLimiter = rateLimit({
+  windowMs: Number(process.env.PASSWORD_RESET_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+  limit: Number(process.env.PASSWORD_RESET_EMAIL_RATE_LIMIT_MAX || 5),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `forgot-email:${hashIdentificador(normalizarEmailLogin(req))}`,
+  message: mensagemRecuperacaoGenerica,
+});
+
+const validacaoTokenLimiter = rateLimit({
+  windowMs: Number(process.env.PASSWORD_RESET_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+  limit: Number(process.env.PASSWORD_RESET_TOKEN_VALIDATE_RATE_LIMIT_MAX || 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `reset-validate:${normalizarIpCliente(req)}`,
+  message: {
+    erro: "Muitas tentativas com este link. Solicite um novo link de recuperação.",
+  },
+});
+
+const redefinicaoTokenLimiter = rateLimit({
+  windowMs: Number(process.env.PASSWORD_RESET_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+  limit: Number(process.env.PASSWORD_RESET_TOKEN_RATE_LIMIT_MAX || 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req, res) => res.statusCode < 400,
+  keyGenerator: (req) => `reset-use:${normalizarIpCliente(req)}`,
+  message: {
+    erro: "Muitas tentativas de redefinição. Solicite um novo link.",
+  },
+});
 
 const loginLimiter = rateLimit({
   windowMs: Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
@@ -47,6 +101,22 @@ function limparLoginLimiterAoSucesso(req, res, next) {
 
 router.get("/csrf-token", getCsrfToken);
 router.post("/login", limparLoginLimiterAoSucesso, loginLimiter, authController.login);
+router.post(
+  "/forgot-password",
+  recuperacaoPorIpLimiter,
+  recuperacaoPorEmailLimiter,
+  passwordResetController.solicitar
+);
+router.post(
+  "/reset-password/validate",
+  validacaoTokenLimiter,
+  passwordResetController.validar
+);
+router.post(
+  "/reset-password",
+  redefinicaoTokenLimiter,
+  passwordResetController.redefinir
+);
 router.get("/dev-users", authController.listarUsuariosDev);
 router.post("/dev-login", authController.devLogin);
 router.get("/me", autenticar, authController.me);

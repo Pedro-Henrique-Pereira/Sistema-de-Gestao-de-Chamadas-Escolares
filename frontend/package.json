@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/tests/authRouting.test.js src/tests/frequenciaMetricas.test.js src/tests/atrasosSync.test.js src/tests/privateDataCache.test.js src/tests/apiUrlSecurity.test.js",
+    "test": "node --test src/tests/authRouting.test.js src/tests/frequenciaMetricas.test.js src/tests/atrasosSync.test.js src/tests/privateDataCache.test.js src/tests/apiUrlSecurity.test.js src/tests/passwordValidation.test.js",
     "test:auth": "node --test src/tests/authRouting.test.js"
   },
   "dependencies": {

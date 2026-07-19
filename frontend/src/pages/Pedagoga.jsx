@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, LogOut, Pencil, Search } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  Clock3,
+  FileText,
+  ListChecks,
+  LogOut,
+  MoreHorizontal,
+  Pencil,
+  Save,
+  Search,
+} from "lucide-react";
 import api from "../services/api";
 import { pedagogaService } from "../services/pedagogaService";
 import AutomacaoFeedbackModal from "../components/AutomacaoFeedbackModal";
@@ -12,11 +23,19 @@ import "../styles/Admin.css";
 import "../styles/Pedagoga.css";
 import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
 import { useAuth } from "../context/AuthContext";
-import { resumirStatusFrequencia } from "../utils/frequenciaMetricas";
+import {
+  classificarFrequenciaParaExibicao,
+  resumirStatusFrequencia,
+} from "../utils/frequenciaMetricas";
 import { registrarErroCliente } from "../utils/clientLogger";
 
 const hojeISO = () => dataBrasiliaISO();
 const MIN_CARACTERES_BUSCA_RESPONSAVEIS = 2;
+
+function formatarDataChamada(valor) {
+  const [ano, mes, dia] = String(valor || "").slice(0, 10).split("-");
+  return ano && mes && dia ? `${dia}/${mes}/${ano}` : String(valor || "");
+}
 
 function normalizarStatus(aluno) {
   return String(aluno.status_presenca || aluno.status || "ausente").toLowerCase();
@@ -66,6 +85,9 @@ function Pedagoga() {
   const [chamadas, setChamadas] = useState([]);
   const [chamadasConfirmadas, setChamadasConfirmadas] = useState([]);
   const [chamadaConfirmadaEditando, setChamadaConfirmadaEditando] = useState(null);
+  const [chamadaConfirmadaAberta, setChamadaConfirmadaAberta] = useState(null);
+  const [detalhesChamadasConfirmadas, setDetalhesChamadasConfirmadas] = useState({});
+  const [detalheConfirmadoCarregando, setDetalheConfirmadoCarregando] = useState(null);
   const [turmasPendentes, setTurmasPendentes] = useState([]);
   const [responsaveis, setResponsaveis] = useState([]);
   const [buscaResponsaveis, setBuscaResponsaveis] = useState("");
@@ -636,11 +658,39 @@ function Pedagoga() {
     }
   }
 
+  async function alternarDetalhesChamadaConfirmada(id) {
+    if (chamadaConfirmadaAberta === id) {
+      setChamadaConfirmadaAberta(null);
+      return;
+    }
+
+    setChamadaConfirmadaAberta(id);
+    if (detalhesChamadasConfirmadas[id]) return;
+
+    try {
+      setDetalheConfirmadoCarregando(id);
+      const { data } = await pedagogaService.detalharChamadaConfirmada(id);
+      setDetalhesChamadasConfirmadas((detalhesAtuais) => ({
+        ...detalhesAtuais,
+        [id]: data.chamada,
+      }));
+    } catch (error) {
+      setChamadaConfirmadaAberta(null);
+      setMensagem(error.message);
+    } finally {
+      setDetalheConfirmadoCarregando(null);
+    }
+  }
+
   async function abrirEdicaoChamadaSalva(id) {
     try {
       setLoading(true);
       const { data } = await pedagogaService.detalharChamadaConfirmada(id);
       setChamadaConfirmadaEditando(data.chamada);
+      setDetalhesChamadasConfirmadas((detalhesAtuais) => ({
+        ...detalhesAtuais,
+        [id]: data.chamada,
+      }));
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
       setMensagem(error.message);
@@ -663,6 +713,10 @@ function Pedagoga() {
 
       const { data } = await pedagogaService.detalharChamadaConfirmada(chamadaConfirmadaEditando.id);
       setChamadaConfirmadaEditando(data.chamada);
+      setDetalhesChamadasConfirmadas((detalhesAtuais) => ({
+        ...detalhesAtuais,
+        [data.chamada.id]: data.chamada,
+      }));
       await Promise.all([carregarDashboard(), carregarChamadas()]);
       cacheRef.current.dashboardCarregado = true;
       cacheRef.current.chamadasCarregadas = true;
@@ -741,7 +795,24 @@ function Pedagoga() {
   }
 
   function alterarStatusPedagogico(alunoId, status) {
+    if (status === "atrasado" && !configAtraso.atrasoLiberado) {
+      setMensagem(`Atrasos só podem ser marcados até ${configAtraso.horarioLimiteAtraso}. Depois desse horário permanece como falta.`);
+      return;
+    }
     setAlunosPedagogicos((prev) => ({ ...prev, [alunoId]: status }));
+  }
+
+  function edicaoIntroduzNovoAtraso(chamada, estadosAlunos) {
+    const atrasosAnteriores = new Map(
+      (chamada?.alunos || []).map((aluno) => [
+        Number(aluno.aluno_id || aluno.alunoId || aluno.id),
+        Boolean(aluno.atrasado),
+      ])
+    );
+
+    return Object.entries(estadosAlunos || {}).some(
+      ([alunoId, status]) => status === "atrasado" && !atrasosAnteriores.get(Number(alunoId))
+    );
   }
 
   function editarChamadaPedagogica(chamada) {
@@ -780,6 +851,20 @@ function Pedagoga() {
       setLoading(true);
 
       if (chamadaEditando) {
+        if (edicaoIntroduzNovoAtraso(chamadaEditando, alunosPedagogicos)) {
+          const configServidor = await buscarConfiguracaoEscola();
+          const configAtual = {
+            horarioLimiteAtraso: String(configServidor.horarioLimiteAtraso || configServidor.horario_limite_atraso || "07:45").slice(0, 5),
+            atrasoLiberado: Boolean(configServidor.atraso_liberado),
+            horarioServidor: String(configServidor.horario_servidor || "").slice(0, 5),
+          };
+          setConfigAtraso(configAtual);
+
+          if (!configAtual.atrasoLiberado) {
+            throw new Error(`Atrasos só podem ser marcados até ${configAtual.horarioLimiteAtraso}. Depois desse horário permanece como falta.`);
+          }
+        }
+
         await pedagogaService.atualizarChamadaTemporaria(chamadaEditando.id, {
           turma_id: turmaSelecionada.id,
           materia: chamadaEditando.materia || "Chamada Pedagógica",
@@ -1020,6 +1105,8 @@ function Pedagoga() {
                                   ? "status-button presente ativo"
                                   : "status-button presente"
                               }
+                              disabled={!configAtraso.atrasoLiberado || loading}
+                              title={!configAtraso.atrasoLiberado ? `Depois de ${configAtraso.horarioLimiteAtraso}, atraso permanece como falta.` : ""}
                               onClick={() => alterarStatusPedagogico(aluno.id, "atrasado")}
                             >
                               Atrasado
@@ -1038,11 +1125,36 @@ function Pedagoga() {
                 {chamadas.map((chamada) => {
                   const aberta = chamadasAbertas[chamada.id] || false;
                   const resumo = getResumoChamada(chamada);
+                  const idConteudo = `attendance-body-${chamada.id}`;
+
                   return <div className={`attendance-accordion ${aberta ? "open" : ""}`} key={chamada.id} ref={(elemento) => { chamadasRefs.current[chamada.id] = elemento; }}>
-                    <button type="button" className="attendance-toggle" onClick={() => alternarChamada(chamada.id)}>
-                      <div className="attendance-toggle-info"><strong>{chamada.turma_nome}</strong><span>{chamada.data_chamada} • {chamada.professor_nome} • {chamada.materia}</span></div>
-                      <div className="attendance-summary"><span>Total: {resumo.total}</span><span className="summary-present">Presentes: {resumo.presentes}</span><span className="summary-absent">Faltas: {resumo.faltas}</span><span className="summary-justified">Justificadas: {resumo.justificadas}</span></div>
-                      <div className="accordion-actions">
+                    <div className="attendance-header">
+                      <button
+                        type="button"
+                        className="attendance-toggle"
+                        onClick={() => alternarChamada(chamada.id)}
+                        aria-expanded={aberta}
+                        aria-controls={idConteudo}
+                      >
+                        <div className="attendance-toggle-info">
+                          <strong>{chamada.turma_nome}</strong>
+                          <span>{formatarDataChamada(chamada.data_chamada)} • {chamada.professor_nome} • {chamada.materia}</span>
+                        </div>
+
+                        <div className="attendance-summary">
+                          <span>Total: {resumo.total}</span>
+                          <span className="summary-present">Presentes: {resumo.presentes}</span>
+                          <span className="summary-absent">Faltas: {resumo.faltas}</span>
+                          <span className="summary-justified">Justificadas: {resumo.justificadas}</span>
+                        </div>
+
+                        <span className="attendance-expand-label">
+                          <ChevronDown className={aberta ? "rotated" : ""} size={18} aria-hidden="true" />
+                          {aberta ? "Ocultar alunos" : "Ver alunos"}
+                        </span>
+                      </button>
+
+                      <div className="accordion-actions" role="group" aria-label={`Ações da chamada da turma ${chamada.turma_nome}`}>
                         <button
                           type="button"
                           className="btn-primary edit-attendance-button"
@@ -1052,44 +1164,69 @@ function Pedagoga() {
                             salvarChamada(chamada);
                           }}
                         >
-                          Confirmar chamada
+                          <CheckCircle2 size={17} aria-hidden="true" /> Confirmar chamada
                         </button>
-                        <button
-                          type="button"
-                          className="btn-secondary edit-attendance-button"
-                          disabled={loading || !chamada.pode_editar}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            editarChamadaPedagogica(chamada);
-                          }}
-                        >
-                          Revisar
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary edit-attendance-button"
-                          disabled={loading || !chamada.pode_editar}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            salvarRevisaoTemporaria(chamada);
-                          }}
-                        >
-                          Salvar revisão
-                        </button>
-                        <span className="accordion-arrow">{aberta ? "Recolher" : "Expandir"}</span>
+
+                        <details className="attendance-more-actions">
+                          <summary>
+                            <MoreHorizontal size={18} aria-hidden="true" />
+                            Mais opções
+                          </summary>
+                          <div className="attendance-actions-menu">
+                            <button
+                              type="button"
+                              disabled={loading || !chamada.pode_editar}
+                              onClick={(event) => {
+                                event.currentTarget.closest("details")?.removeAttribute("open");
+                                editarChamadaPedagogica(chamada);
+                              }}
+                            >
+                              <Pencil size={16} aria-hidden="true" />
+                              <span><strong>Editar chamada</strong><small>Alterar presenças e faltas</small></span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={loading || !chamada.pode_editar}
+                              onClick={(event) => {
+                                event.currentTarget.closest("details")?.removeAttribute("open");
+                                salvarRevisaoTemporaria(chamada);
+                              }}
+                            >
+                              <Save size={16} aria-hidden="true" />
+                              <span><strong>Salvar rascunho</strong><small>Manter a revisão sem confirmar</small></span>
+                            </button>
+                          </div>
+                        </details>
                       </div>
-                    </button>
-                    <div className="attendance-body"><div className="student-list improved">{(chamada.alunos || []).map((aluno) => {
+                    </div>
+
+                    <div className="attendance-body" id={idConteudo}><div className="student-list improved">{(chamada.alunos || []).map((aluno) => {
                       const alunoId = aluno.aluno_id || aluno.id;
                       const chave = `${chamada.id}-${alunoId}`;
                       const statusFinal = getStatusFinal(chamada.id, aluno);
                       return <div className={`student-row improved ${statusFinal === "Presente" || statusFinal === "Atrasado" ? "student-present" : statusFinal === "Falta Justificada" ? "student-justified" : "student-absent"}`} key={chave} ref={(elemento) => { justificativasRefs.current[chave] = elemento; }}>
                         <div className="student-main-info"><div><strong>{aluno.nome}</strong><small>ID aluno: {alunoId}</small></div><span className={`status-badge ${statusFinal === "Presente" || statusFinal === "Atrasado" ? "present" : statusFinal === "Falta Justificada" ? "justified" : "absent"}`}>{statusFinal}</span></div>
                         {(statusFinal === "Ausente" || justificativasAbertas[chave]) && <div className="justify-area" onClick={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
-                          {statusFinal === "Ausente" && <button className="btn-primary justify-toggle" type="button" onClick={(event) => { event.stopPropagation(); justificarRapido(chamada, aluno); }}>Registrar justificativa</button>}
-                          {statusFinal === "Ausente" && <button className="btn-secondary justify-toggle" type="button" disabled={!configAtraso.atrasoLiberado || loading} title={!configAtraso.atrasoLiberado ? `Depois de ${configAtraso.horarioLimiteAtraso}, atraso vira falta.` : ""} onClick={(event) => { event.stopPropagation(); marcarAtrasoChamada(chamada, aluno); }}>Registrar atraso</button>}
-                          <button className="btn-secondary justify-toggle" type="button" onClick={(event) => { event.stopPropagation(); alternarJustificativa(chamada.id, alunoId); }}>{justificativasAbertas[chave] ? "Ocultar justificativa" : "Informar motivo"}</button>
-                          {justificativasAbertas[chave] && <div className="justify-box improved"><label>Justificativa temporária</label><textarea placeholder="Descreva o motivo da ausência..." value={justificativas[chave] || ""} onChange={(e) => marcarJustificado(chamada.id, aluno, e.target.value)} onClick={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} /></div>}
+                          <div className="student-action-bar" role="group" aria-label={`Ações para ${aluno.nome}`}>
+                            <button
+                              className="btn-primary justify-toggle"
+                              type="button"
+                              disabled={loading}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (justificativasAbertas[chave]) {
+                                  alternarJustificativa(chamada.id, alunoId);
+                                } else {
+                                  justificarRapido(chamada, aluno);
+                                }
+                              }}
+                            >
+                              <FileText size={16} aria-hidden="true" />
+                              {justificativasAbertas[chave] ? "Fechar motivo" : "Justificar falta"}
+                            </button>
+                            {statusFinal === "Ausente" && <button className="btn-secondary justify-toggle" type="button" disabled={!configAtraso.atrasoLiberado || loading} title={!configAtraso.atrasoLiberado ? `Depois de ${configAtraso.horarioLimiteAtraso}, atraso vira falta.` : ""} onClick={(event) => { event.stopPropagation(); marcarAtrasoChamada(chamada, aluno); }}><Clock3 size={16} aria-hidden="true" /> Registrar atraso</button>}
+                          </div>
+                          {justificativasAbertas[chave] && <div className="justify-box improved"><label htmlFor={`justificativa-${chave}`}>Justificativa temporária</label><textarea id={`justificativa-${chave}`} placeholder="Descreva o motivo da ausência..." value={justificativas[chave] || ""} onChange={(e) => marcarJustificado(chamada.id, aluno, e.target.value)} onClick={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} /></div>}
                         </div>}
                       </div>;
                     })}</div></div>
@@ -1152,17 +1289,65 @@ function Pedagoga() {
                 </div>
               </div>
               {(chamadasConfirmadas || []).length === 0 ? <div className="empty-state">Nenhum registro encontrado</div> : <div className="class-list">
-                {chamadasConfirmadas.map((chamada) => (
-                  <div className="class-item class-item-rich" key={chamada.id}>
-                    <div><strong>{chamada.turma_nome}</strong><span>{chamada.data_chamada} • {chamada.professor_nome} • {chamada.materia}</span></div>
-                    <div className="attendance-summary">
-                      <span className="summary-present">Presentes: {chamada.total_presentes}</span>
-                      <span className="summary-absent">Faltas: {chamada.total_ausentes}</span>
-                      <span className="summary-justified">Justificadas: {chamada.total_justificados}</span><span className="summary-present">Atrasos: {chamada.total_atrasos || 0}</span>
+                {chamadasConfirmadas.map((chamada) => {
+                  const aberta = chamadaConfirmadaAberta === chamada.id;
+                  const detalhe = detalhesChamadasConfirmadas[chamada.id];
+                  const carregandoDetalhe = detalheConfirmadoCarregando === chamada.id;
+                  const idDetalhe = `confirmed-call-details-${chamada.id}`;
+
+                  return (
+                    <div className={`class-item class-item-rich confirmed-call-card ${aberta ? "details-open" : ""}`} key={chamada.id}>
+                      <div><strong>{chamada.turma_nome}</strong><span>{formatarDataChamada(chamada.data_chamada)} • {chamada.professor_nome} • {chamada.materia}</span></div>
+                      <div className="attendance-summary">
+                        <span className="summary-present">Presentes: {chamada.total_presentes}</span>
+                        <span className="summary-absent">Faltas: {chamada.total_ausentes}</span>
+                        <span className="summary-justified">Justificadas: {chamada.total_justificados}</span><span className="summary-present">Atrasos: {chamada.total_atrasos || 0}</span>
+                      </div>
+                      <div className="confirmed-call-actions">
+                        <button
+                          className="confirmed-call-view-button"
+                          type="button"
+                          onClick={() => alternarDetalhesChamadaConfirmada(chamada.id)}
+                          aria-expanded={aberta}
+                          aria-controls={idDetalhe}
+                        >
+                          <ListChecks size={16} aria-hidden="true" />
+                          {aberta ? "Ocultar chamada" : "Ver chamada"}
+                          <ChevronDown className={aberta ? "rotated" : ""} size={16} aria-hidden="true" />
+                        </button>
+                        <button className="btn-secondary" type="button" disabled={!chamada.pode_editar} title={!chamada.pode_editar ? "O Horário Máximo de Chegada já passou." : ""} onClick={() => abrirEdicaoChamadaSalva(chamada.id)}>{chamada.pode_editar ? "Revisar chamada confirmada" : "Edição bloqueada"}</button>
+                      </div>
+
+                      {aberta && (
+                        <div className="confirmed-call-details" id={idDetalhe}>
+                          {carregandoDetalhe && <div className="confirmed-call-loading" role="status">Carregando lista de alunos...</div>}
+                          {!carregandoDetalhe && detalhe && (
+                            <div className="confirmed-student-list">
+                              {(detalhe.alunos || []).map((aluno) => {
+                                const classificacao = classificarFrequenciaParaExibicao(aluno);
+                                return (
+                                  <div className="confirmed-student-row" key={aluno.frequencia_id || aluno.aluno_id}>
+                                    <div className="confirmed-student-name">
+                                      <strong>{aluno.aluno_nome || aluno.nome}</strong>
+                                      <small>ID aluno: {aluno.aluno_id}</small>
+                                    </div>
+                                    <div className={`confirmed-student-status ${classificacao.categoria}`}>
+                                      <strong>{classificacao.rotulo}</strong>
+                                      {classificacao.detalhe && <small>{classificacao.detalhe}</small>}
+                                    </div>
+                                    {classificacao.motivo && (
+                                      <p className="confirmed-student-reason"><strong>Motivo:</strong> {classificacao.motivo}</p>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <button className="btn-secondary" type="button" disabled={!chamada.pode_editar} title={!chamada.pode_editar ? "O Horário Máximo de Chegada já passou." : ""} onClick={() => abrirEdicaoChamadaSalva(chamada.id)}>{chamada.pode_editar ? "Revisar chamada confirmada" : "Edição bloqueada"}</button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>}
             </div>
 

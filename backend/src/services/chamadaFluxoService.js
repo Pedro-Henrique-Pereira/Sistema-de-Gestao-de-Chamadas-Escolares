@@ -6,6 +6,7 @@ const MENSAGENS = Object.freeze({
   PROFESSOR_CONFIRMADA: "Esta chamada já foi confirmada pela pedagogia e não pode mais ser editada pelo professor.",
   SEM_PERMISSAO: "Você não possui permissão para editar esta chamada.",
   HORARIO_ENCERRADO: "O Horário Máximo de Chegada já passou. Esta chamada não pode mais ser alterada.",
+  ATRASO_FORA_DO_HORARIO: "A marcação de atraso só é permitida até o Horário Máximo de Chegada. Depois desse horário o aluno deve permanecer como falta.",
   SOMENTE_PEDAGOGIA_CONFIRMA: "Apenas a pedagogia pode confirmar uma chamada.",
   CONFLITO_VERSAO: "A chamada foi alterada por outro usuário. Atualize a página antes de tentar novamente.",
   AUTOMACAO_ANTECIPADA: "Automação indisponível até o Horário Máximo de Chegada.",
@@ -20,8 +21,26 @@ function hasMaximumArrivalTimePassed(config = {}) {
   return horarioParaSegundos(config.horario_servidor) > horarioParaSegundos(config.horario_limite_atraso);
 }
 
-function statusEfetivo(chamada, config = {}) {
-  if (chamada?.status === STATUS_CONFIRMADO && hasMaximumArrivalTimePassed(config)) return "BLOQUEADA";
+function isEditLockEnabled(config = {}) {
+  const valor = config.bloquear_edicao_chamadas_apos_horario;
+  if (valor === undefined || valor === null) return true;
+  return valor === true || valor === 1 || String(valor).toLowerCase() === "true" || String(valor) === "1";
+}
+
+function canPedagogueBypassMaximumArrivalTime(config = {}, usuario = {}) {
+  return usuario?.tipo === "pedagoga" && !isEditLockEnabled(config);
+}
+
+function canRegisterStudentDelay(config = {}, usuario = {}) {
+  return !hasMaximumArrivalTimePassed(config) || canPedagogueBypassMaximumArrivalTime(config, usuario);
+}
+
+function statusEfetivo(chamada, config = {}, usuario = {}) {
+  if (
+    chamada?.status === STATUS_CONFIRMADO &&
+    hasMaximumArrivalTimePassed(config) &&
+    !canPedagogueBypassMaximumArrivalTime(config, usuario)
+  ) return "BLOQUEADA";
   if (chamada?.status === STATUS_CONFIRMADO) return "CONFIRMADA";
   if (chamada?.status === STATUS_TEMPORARIO) return "TEMPORARIA";
   return String(chamada?.status || "").toUpperCase();
@@ -45,7 +64,11 @@ function canProfessorEditCall(chamada, usuario) {
 
 function canPedagogueEditCall(chamada, usuario, config = {}) {
   if (!chamada || !["pedagoga", "administracao"].includes(usuario?.tipo)) return negado(MENSAGENS.SEM_PERMISSAO);
-  if (chamada.status === STATUS_CONFIRMADO && hasMaximumArrivalTimePassed(config)) return negado(MENSAGENS.HORARIO_ENCERRADO);
+  if (
+    chamada.status === STATUS_CONFIRMADO &&
+    hasMaximumArrivalTimePassed(config) &&
+    !canPedagogueBypassMaximumArrivalTime(config, usuario)
+  ) return negado(MENSAGENS.HORARIO_ENCERRADO);
   if (![STATUS_TEMPORARIO, STATUS_CONFIRMADO].includes(chamada.status)) return negado(MENSAGENS.SEM_PERMISSAO);
   return permitido();
 }
@@ -76,6 +99,31 @@ function validateCallVersion(chamada, versaoRecebida) {
 
 function obterAlunoId(aluno) {
   return Number(aluno?.aluno_id || aluno?.alunoId || aluno?.id);
+}
+
+function alunoEstaAtrasado(aluno) {
+  const valor = aluno?.atrasado;
+  return valor === true || valor === 1 || String(valor || "").toLowerCase() === "true" || String(valor || "") === "1";
+}
+
+function hasNewStudentDelay(alunosAnteriores = [], alunosRecebidos = []) {
+  if (!Array.isArray(alunosAnteriores) || !Array.isArray(alunosRecebidos)) return false;
+
+  const atrasosAnteriores = new Map(
+    alunosAnteriores.map((aluno) => [obterAlunoId(aluno), alunoEstaAtrasado(aluno)])
+  );
+
+  return alunosRecebidos.some((aluno) => {
+    const alunoId = obterAlunoId(aluno);
+    return alunoId > 0 && alunoEstaAtrasado(aluno) && !atrasosAnteriores.get(alunoId);
+  });
+}
+
+function canApplyStudentDelays(alunosAnteriores = [], alunosRecebidos = [], config = {}, usuario = {}) {
+  if (!hasNewStudentDelay(alunosAnteriores, alunosRecebidos)) return permitido();
+  return !canRegisterStudentDelay(config, usuario)
+    ? negado(MENSAGENS.ATRASO_FORA_DO_HORARIO)
+    : permitido();
 }
 
 function validateCompleteStudentList(alunosEsperados = [], alunosRecebidos = []) {
@@ -150,6 +198,9 @@ module.exports = {
   STATUS_CONFIRMADO,
   MENSAGENS,
   hasMaximumArrivalTimePassed,
+  isEditLockEnabled,
+  canPedagogueBypassMaximumArrivalTime,
+  canRegisterStudentDelay,
   statusEfetivo,
   canProfessorEditCall,
   canPedagogueEditCall,
@@ -157,6 +208,8 @@ module.exports = {
   canStartAutomation,
   calculateStudentDelay,
   validateCallVersion,
+  hasNewStudentDelay,
+  canApplyStudentDelays,
   validateCompleteStudentList,
   assertPermission,
 };

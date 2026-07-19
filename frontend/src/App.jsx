@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import Login from "./pages/Login";
+import EsqueciMinhaSenha from "./pages/EsqueciMinhaSenha";
+import RedefinirSenha from "./pages/RedefinirSenha";
 import Admin from "./pages/Admin";
 import Professor from "./pages/Professor";
 import Pedagoga from "./pages/Pedagoga";
@@ -20,6 +22,8 @@ function App() {
               <Route path="/" element={<Navigate to="/login" replace />} />
 
               <Route path="/login" element={<Login />} />
+              <Route path="/esqueci-minha-senha" element={<EsqueciMinhaSenha />} />
+              <Route path="/redefinir-senha" element={<RedefinirSenha />} />
 
               <Route
                 path="/admin"

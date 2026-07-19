@@ -1,5 +1,5 @@
 const db = require("../database/db");
-const { garantirConfiguracao, horarioParaMinutos } = require("./configuracoesEscolaController");
+const { garantirConfiguracao } = require("./configuracoesEscolaController");
 const { garantirColunasAtraso } = require("../utils/atrasoUtils");
 const chamadaService = require("../services/chamadaService");
 const fluxoService = require("../services/chamadaFluxoService");
@@ -15,10 +15,8 @@ function alunoEstaAusente(aluno) {
   return String(aluno.status_presenca || aluno.status || "").toLowerCase() === "ausente";
 }
 
-function atrasoLiberadoPelaConfiguracao(config) {
-  const limite = String(config.horario_limite_atraso || "07:45:00").slice(0, 8);
-  const servidor = String(config.horario_servidor || "00:00:00").slice(0, 8);
-  return horarioParaMinutos(servidor) <= horarioParaMinutos(limite);
+function atrasoLiberadoPelaConfiguracao(config, usuario) {
+  return fluxoService.canRegisterStudentDelay(config, usuario);
 }
 
 function hojeLocalISO() {
@@ -147,7 +145,7 @@ async function verificarTurmas(req, res, next) {
     const materia = normalizarMateria(req.query.materia);
 
     const configAtraso = await garantirConfiguracao();
-    const atrasoLiberado = atrasoLiberadoPelaConfiguracao(configAtraso);
+    const atrasoLiberado = atrasoLiberadoPelaConfiguracao(configAtraso, req.usuario);
 
     const [rows] = await db.execute(
       `
@@ -252,7 +250,7 @@ async function historico(req, res, next) {
 
     const chamadas = rows.map((chamada) => ({
       ...chamada,
-      status_fluxo: fluxoService.statusEfetivo(chamada, configAtraso),
+      status_fluxo: fluxoService.statusEfetivo(chamada, configAtraso, req.usuario),
       pode_editar: fluxoService.canProfessorEditCall(chamada, req.usuario).permitido,
       pode_marcar_atraso: atrasoLiberado && fluxoService.canProfessorEditCall(chamada, req.usuario).permitido,
       atraso_liberado: atrasoLiberado,
@@ -347,6 +345,13 @@ async function atualizar(req, res, next) {
       fluxoService.assertPermission(fluxoService.canProfessorEditCall(chamada, req.usuario));
       fluxoService.assertPermission(fluxoService.validateCallVersion(chamada, req.body.versao), 409);
 
+      if (fluxoService.hasNewStudentDelay(parseAlunos(chamada.alunos), req.body.alunos)) {
+        const configFluxo = await garantirConfiguracao(connection);
+        fluxoService.assertPermission(
+          fluxoService.canApplyStudentDelays(parseAlunos(chamada.alunos), req.body.alunos, configFluxo, req.usuario)
+        );
+      }
+
       const materia = normalizarMateria(req.body.materia || req.body.disciplina);
       const alunos = montarAlunosJSON(req.body.alunos);
       fluxoService.assertPermission(
@@ -418,7 +423,7 @@ async function marcarAtraso(req, res, next) {
     transacaoIniciada = true;
 
     const configFluxo = await garantirConfiguracao(connection);
-    if (fluxoService.hasMaximumArrivalTimePassed(configFluxo)) {
+    if (!fluxoService.canRegisterStudentDelay(configFluxo, req.usuario)) {
       const erro = new Error(fluxoService.MENSAGENS.HORARIO_ENCERRADO);
       erro.status = 403;
       throw erro;
@@ -480,7 +485,13 @@ async function marcarAtraso(req, res, next) {
         chamadaId,
         usuario: req.usuario,
         evento: "ALUNO_MARCADO_COMO_ATRASADO",
-        valoresNovos: { aluno_id: alunoId, horario_registro_atraso: horarioMarcacao, atraso_minutos: atrasoMinutos },
+        valoresNovos: {
+          aluno_id: alunoId,
+          horario_registro_atraso: horarioMarcacao,
+          atraso_minutos: atrasoMinutos,
+          edicao_apos_horario: fluxoService.canPedagogueBypassMaximumArrivalTime(configFluxo, req.usuario)
+            && fluxoService.hasMaximumArrivalTimePassed(configFluxo),
+        },
       });
 
       await connection.commit();
@@ -569,7 +580,15 @@ async function marcarAtraso(req, res, next) {
       usuario: req.usuario,
       evento: "ALUNO_MARCADO_COMO_ATRASADO",
       valoresAnteriores: { aluno_id: alunoId, status: frequencia.status, atrasado: Boolean(frequencia.atrasado) },
-      valoresNovos: { aluno_id: alunoId, status: "presente", atrasado: true, horario_registro_atraso: horarioMarcacao, atraso_minutos: atrasoMinutos },
+      valoresNovos: {
+        aluno_id: alunoId,
+        status: "presente",
+        atrasado: true,
+        horario_registro_atraso: horarioMarcacao,
+        atraso_minutos: atrasoMinutos,
+        edicao_apos_horario: fluxoService.canPedagogueBypassMaximumArrivalTime(configFluxo, req.usuario)
+          && fluxoService.hasMaximumArrivalTimePassed(configFluxo),
+      },
     });
 
     await connection.commit();

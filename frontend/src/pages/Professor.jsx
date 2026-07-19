@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  BookOpenCheck,
+  ChevronDown,
+  Clock3,
+  LogOut,
+  Pencil,
+  Settings,
+  X,
+} from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { dataBrasiliaISO, minutosAtuaisBrasilia } from "../utils/brasiliaTime";
+import { dataBrasiliaISO } from "../utils/brasiliaTime";
 import {
   atualizarChamada,
   criarChamada,
@@ -316,30 +325,37 @@ export default function Professor() {
   return (
     <main className="professor-page">
       <header className="professor-header">
-        <section className="professor-user-info">
-          <div className="professor-profile-block">
-            <div className="professor-avatar">
-              {(usuarioLogado?.nome || "P").charAt(0).toUpperCase()}
+        <section className="professor-header-inner">
+          <div className="professor-brand-block">
+            <div className="professor-brand-icon" aria-hidden="true">
+              <BookOpenCheck size={22} />
             </div>
-
             <div>
-              <h1>{usuarioLogado?.nome || "Professor"}</h1>
-              <p>{usuarioLogado?.tipo || "Professor"}</p>
+              <span>Sistema de Gestão Escolar</span>
+              <strong>Ambiente do Professor</strong>
             </div>
           </div>
 
-          <div className="professor-actions-block">
+          <div className="professor-profile-block">
+            <div className="professor-profile-copy">
+              <strong>{usuarioLogado?.nome || "Professor"}</strong>
+              <span>{usuarioLogado?.tipo || "professor"}</span>
+            </div>
+            <div className="professor-avatar" aria-hidden="true">
+              {(usuarioLogado?.nome || "P").charAt(0).toUpperCase()}
+            </div>
             <button
               className="config-button"
               type="button"
               onClick={() => setModalConfigAberto(true)}
               aria-label="Abrir configurações"
+              title="Configurações"
             >
-              ⚙️
+              <Settings size={20} aria-hidden="true" />
             </button>
 
-            <button className="logout-button" type="button" onClick={logout}>
-              ↩ Sair
+            <button className="logout-button" type="button" onClick={logout} aria-label="Encerrar sessão" title="Encerrar sessão">
+              <LogOut size={20} aria-hidden="true" />
             </button>
           </div>
         </section>
@@ -351,42 +367,58 @@ export default function Professor() {
             {erroInicial} Atualize a página para tentar novamente.
           </div>
         )}
-        <div className="empty-state atraso-info-card">
-          <strong>Horário máximo de chegada: {configAtraso.horarioLimiteAtraso}</strong>
-          <span>{configAtraso.atrasoLiberado ? "Atrasos permitidos até o horário limite pelo relógio do servidor." : `Após o horário limite, atrasos viram falta. Servidor: ${configAtraso.horarioServidor || "--:--"}`}</span>
-        </div>
-        <div className="turma-select-area">
-          <label htmlFor="disciplina">Disciplina</label>
-          <input
-            id="disciplina"
-            className="disciplina-input"
-            type="text"
-            value={disciplina}
-            onChange={(event) => setDisciplina(event.target.value)}
-            placeholder="Ex: Matemática"
-            disabled={Boolean(chamadaEditandoId)}
-          />
-        </div>
+        <section className="professor-page-heading">
+          <div>
+            <span className="professor-eyebrow">Registro de frequência</span>
+            <h1>Chamada de hoje</h1>
+            <p>Selecione a disciplina e a turma para registrar as presenças com segurança.</p>
+          </div>
+          <time dateTime={hojeLocalISO()}>{dataParaBR(hojeLocalISO())}</time>
+        </section>
 
-        <div className="turma-select-area">
-          <label htmlFor="turma">Turma da chamada</label>
+        <section className="professor-call-card">
+          <div className={`atraso-info-card ${configAtraso.atrasoLiberado ? "open" : "closed"}`} role="status">
+            <div className="atraso-info-icon" aria-hidden="true"><Clock3 size={20} /></div>
+            <div>
+              <strong>Horário máximo de chegada: {configAtraso.horarioLimiteAtraso}</strong>
+              <span>{configAtraso.atrasoLiberado ? "Atrasos podem ser registrados até o horário limite do servidor." : `Prazo encerrado. Novos atrasos permanecem como falta. Servidor: ${configAtraso.horarioServidor || "--:--"}`}</span>
+            </div>
+          </div>
 
-          <select
-            id="turma"
-            value={turmaSelecionada}
-            onChange={(event) => selecionarTurma(event.target.value)}
-            disabled={Boolean(chamadaEditandoId)}
-          >
-            <option value="">Selecione uma turma</option>
+          <div className="professor-form-grid">
+            <div className="turma-select-area">
+              <label htmlFor="disciplina">Disciplina</label>
+              <input
+                id="disciplina"
+                className="disciplina-input"
+                type="text"
+                value={disciplina}
+                onChange={(event) => setDisciplina(event.target.value)}
+                placeholder="Ex: Matemática"
+                disabled={Boolean(chamadaEditandoId)}
+              />
+            </div>
 
-            {turmasDisponiveis.length === 0 && <option value="" disabled>Nenhum registro encontrado</option>}
-            {turmasDisponiveis.map((turma) => (
-              <option key={turma.id} value={turma.id}>
-                {turma.nome}
-              </option>
-            ))}
-          </select>
-        </div>
+            <div className="turma-select-area">
+              <label htmlFor="turma">Turma da chamada</label>
+
+              <select
+                id="turma"
+                value={turmaSelecionada}
+                onChange={(event) => selecionarTurma(event.target.value)}
+                disabled={Boolean(chamadaEditandoId)}
+              >
+                <option value="">Selecione uma turma</option>
+
+                {turmasDisponiveis.length === 0 && <option value="" disabled>Nenhum registro encontrado</option>}
+                {turmasDisponiveis.map((turma) => (
+                  <option key={turma.id} value={turma.id}>
+                    {turma.nome}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
         {!turmaAtual && (
           <div className="empty-state">
@@ -470,6 +502,7 @@ export default function Professor() {
             </div>
           </>
         )}
+        </section>
 
         <section className="chamadas-historico">
           <div className="chamada-title">
@@ -489,7 +522,7 @@ export default function Professor() {
                     <strong>{chamada.turmaNome}</strong>
                     <span>{chamada.disciplina}</span>
                     <span className={`call-flow-badge ${confirmada ? "confirmed" : "temporary"}`}>
-                      {confirmada ? "Confirmada pela pedagogia" : "Aguardando confirmacao"}
+                      {confirmada ? "Confirmada pela pedagogia" : "Aguardando confirmação"}
                     </span>
                   </div>
 
@@ -511,14 +544,16 @@ export default function Professor() {
                       title={!podeEditar && confirmada ? "Esta chamada ja foi confirmada pela pedagogia." : ""}
                       onClick={() => editarChamada(chamada)}
                     >
-                      Editar
+                      <Pencil size={16} aria-hidden="true" /> Editar
                     </button>
                     <button
                       type="button"
                       className="editar-chamada-button"
                       onClick={() => setHistoricoAberto((prev) => ({ ...prev, [chamada.id]: !prev[chamada.id] }))}
+                      aria-expanded={Boolean(historicoAberto[chamada.id])}
                     >
-                      {historicoAberto[chamada.id] ? "Recolher" : "Expandir"}
+                      <ChevronDown className={historicoAberto[chamada.id] ? "rotated" : ""} size={17} aria-hidden="true" />
+                      {historicoAberto[chamada.id] ? "Recolher" : "Ver alunos"}
                     </button>
                   </div>
 
@@ -566,7 +601,7 @@ export default function Professor() {
                 onClick={() => setModalConfigAberto(false)}
                 aria-label="Fechar configurações"
               >
-                ✕
+                <X size={20} aria-hidden="true" />
               </button>
             </div>
 

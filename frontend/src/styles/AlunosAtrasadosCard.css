@@ -162,6 +162,73 @@
   white-space: nowrap;
 }
 
+@media (max-width: 900px) {
+  .late-students-table-wrapper {
+    overflow: visible;
+    padding: 12px;
+  }
+
+  .late-students-table {
+    min-width: 0;
+  }
+
+  .late-students-table thead {
+    display: none;
+  }
+
+  .late-students-table,
+  .late-students-table tbody {
+    display: block;
+  }
+
+  .late-students-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .late-students-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 14px;
+    background: #ffffff;
+  }
+
+  .late-students-table tbody tr:hover {
+    background: #ffffff;
+  }
+
+  .late-students-table td {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    padding: 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .late-students-table td:first-child {
+    grid-column: 1 / -1;
+    background: #f8fafc;
+    color: #0f172a;
+    font-weight: 800;
+  }
+
+  .late-students-table td:last-child {
+    border-bottom: 0;
+  }
+
+  .late-students-table td::before {
+    content: attr(data-label);
+    color: #64748b;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+  }
+}
+
 @media (max-width: 720px) {
   .late-students-header {
     align-items: flex-start;

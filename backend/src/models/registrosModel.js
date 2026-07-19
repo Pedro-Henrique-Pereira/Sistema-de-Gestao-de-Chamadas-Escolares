@@ -115,8 +115,7 @@ function agruparAlunosComResponsaveis(rows) {
   return Array.from(mapa.values());
 }
 
-async function listarAlunosPaginado({ page = 1, limit = 50, busca = '' } = {}) {
-  const { paginaAtual, limite, offset } = normalizarPaginacao({ page, limit });
+function montarFiltroBuscaAlunos(busca = '') {
   const termoBusca = String(busca || '').trim().slice(0, 80);
   const filtros = [];
   const parametrosFiltro = [];
@@ -136,7 +135,143 @@ async function listarAlunosPaginado({ page = 1, limit = 50, busca = '' } = {}) {
     parametrosFiltro.push(termo, termo, termo, termo, `%${digitos || termoBusca}%`);
   }
 
-  const whereClause = `WHERE 1 = 1 ${filtros.join('\n')}`;
+  return {
+    whereClause: `WHERE 1 = 1 ${filtros.join('\n')}`,
+    parametrosFiltro,
+  };
+}
+
+function distribuirTurmasEmPaginas(grupos = [], limite = 50) {
+  const paginas = [];
+  let paginaAtual = [];
+  let totalPagina = 0;
+
+  grupos.forEach((grupo) => {
+    const totalGrupo = Math.max(Number(grupo.total || 0), 0);
+    if (totalGrupo === 0) return;
+
+    if (paginaAtual.length > 0 && totalPagina + totalGrupo > limite) {
+      paginas.push(paginaAtual);
+      paginaAtual = [];
+      totalPagina = 0;
+    }
+
+    paginaAtual.push({ ...grupo, total: totalGrupo });
+    totalPagina += totalGrupo;
+  });
+
+  if (paginaAtual.length > 0) {
+    paginas.push(paginaAtual);
+  }
+
+  return paginas;
+}
+
+async function listarAlunosPaginadoPorTurma({ page = 1, limit = 50, busca = '' } = {}) {
+  const { paginaAtual, limite } = normalizarPaginacao({ page, limit });
+  const { whereClause, parametrosFiltro } = montarFiltroBuscaAlunos(busca);
+  const [gruposRows] = await db.execute(
+    `
+    SELECT
+      a.turma_id,
+      COALESCE(t.nome, '') AS turma_nome,
+      COUNT(DISTINCT a.id) AS total
+    FROM alunos a
+    LEFT JOIN turmas t ON t.id = a.turma_id
+    LEFT JOIN responsaveis r ON r.aluno_id = a.id
+    ${whereClause}
+    GROUP BY a.turma_id, t.nome
+    ORDER BY turma_nome ASC, a.turma_id ASC
+    `,
+    parametrosFiltro
+  );
+
+  const totalRegistros = gruposRows.reduce(
+    (total, grupo) => total + Number(grupo.total || 0),
+    0
+  );
+  const paginas = distribuirTurmasEmPaginas(gruposRows, limite);
+  const totalPaginas = Math.max(paginas.length, 1);
+  const paginaEfetiva = Math.min(paginaAtual, totalPaginas);
+  const gruposPagina = paginas[paginaEfetiva - 1] || [];
+  const meta = {
+    totalRegistros,
+    paginaAtual: paginaEfetiva,
+    totalPaginas,
+    limite,
+    totalPagina: 0,
+    turmasPagina: gruposPagina.length,
+    paginacaoPorTurma: true,
+  };
+
+  if (gruposPagina.length === 0) {
+    return { alunos: [], dados: [], ...meta };
+  }
+
+  const idsTurmas = gruposPagina
+    .filter((grupo) => grupo.turma_id !== null && grupo.turma_id !== undefined)
+    .map((grupo) => Number(grupo.turma_id));
+  const incluiSemTurma = gruposPagina.some(
+    (grupo) => grupo.turma_id === null || grupo.turma_id === undefined
+  );
+  const filtrosTurma = [];
+  const parametrosTurma = [];
+
+  if (incluiSemTurma) {
+    filtrosTurma.push('a.turma_id IS NULL');
+  }
+
+  if (idsTurmas.length > 0) {
+    filtrosTurma.push(`a.turma_id IN (${idsTurmas.map(() => '?').join(',')})`);
+    parametrosTurma.push(...idsTurmas);
+  }
+
+  const [idsRows] = await db.execute(
+    `
+    SELECT DISTINCT a.id, COALESCE(t.nome, '') AS turma_nome, a.nome AS aluno_nome
+    FROM alunos a
+    LEFT JOIN turmas t ON t.id = a.turma_id
+    LEFT JOIN responsaveis r ON r.aluno_id = a.id
+    ${whereClause}
+    AND (${filtrosTurma.join(' OR ')})
+    ORDER BY turma_nome ASC, aluno_nome ASC, a.id ASC
+    `,
+    [...parametrosFiltro, ...parametrosTurma]
+  );
+
+  if (!idsRows.length) {
+    return { alunos: [], dados: [], ...meta };
+  }
+
+  const ids = idsRows.map((row) => row.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await db.execute(
+    `
+    SELECT
+      a.id, a.nome, a.idade, a.turma_id, t.nome AS turma,
+      r.id AS responsavel_id, r.nome AS responsavel_nome,
+      r.parentesco AS responsavel_parentesco, r.contato AS responsavel_contato
+    FROM alunos a
+    LEFT JOIN turmas t ON t.id = a.turma_id
+    LEFT JOIN responsaveis r ON r.aluno_id = a.id
+    WHERE a.id IN (${placeholders})
+    ORDER BY t.nome IS NULL, t.nome ASC, a.nome ASC, r.nome ASC
+    `,
+    ids
+  );
+
+  const alunos = agruparAlunosComResponsaveis(rows);
+  return {
+    alunos,
+    dados: alunos,
+    ...meta,
+    totalPagina: alunos.length,
+  };
+}
+
+async function listarAlunosPaginadoIndividual({ page = 1, limit = 50, busca = '' } = {}) {
+  const { paginaAtual, limite, offset } = normalizarPaginacao({ page, limit });
+  const { whereClause, parametrosFiltro } = montarFiltroBuscaAlunos(busca);
 
   const [[totalRow]] = await db.execute(
     `
@@ -186,6 +321,14 @@ async function listarAlunosPaginado({ page = 1, limit = 50, busca = '' } = {}) {
   const alunos = agruparAlunosComResponsaveis(rows);
   const meta = montarMetaPaginacao(totalRow.total, paginaAtual, limite);
   return { alunos, dados: alunos, ...meta };
+}
+
+async function listarAlunosPaginado(entrada = {}) {
+  if (entrada.preservarTurmas) {
+    return listarAlunosPaginadoPorTurma(entrada);
+  }
+
+  return listarAlunosPaginadoIndividual(entrada);
 }
 
 async function criarAluno(dados) {
@@ -383,6 +526,7 @@ module.exports = {
   atualizarTurma,
   removerTurma,
   listarAlunosPaginado,
+  distribuirTurmasEmPaginas,
   criarAluno,
   atualizarAluno,
   atualizarTurmaAluno,

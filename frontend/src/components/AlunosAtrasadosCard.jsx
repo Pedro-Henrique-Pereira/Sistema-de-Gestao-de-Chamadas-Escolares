@@ -256,11 +256,11 @@ export default function AlunosAtrasadosCard({
               <tbody>
                 {alunosAtrasados.map((aluno) => (
                   <tr key={aluno.id}>
-                    <td>{aluno.nome}</td>
-                    <td>{aluno.turma}</td>
-                    <td>{aluno.horarioChamada || "--:--"}</td>
-                    <td>{aluno.horarioRegistro || "--:--"}</td>
-                    <td><span className="late-students-badge">{aluno.tempoAtraso}</span></td>
+                    <td data-label="Aluno">{aluno.nome}</td>
+                    <td data-label="Turma">{aluno.turma}</td>
+                    <td data-label="Horário da chamada">{aluno.horarioChamada || "--:--"}</td>
+                    <td data-label="Chegada">{aluno.horarioRegistro || "--:--"}</td>
+                    <td data-label="Tempo de atraso"><span className="late-students-badge">{aluno.tempoAtraso}</span></td>
                   </tr>
                 ))}
               </tbody>

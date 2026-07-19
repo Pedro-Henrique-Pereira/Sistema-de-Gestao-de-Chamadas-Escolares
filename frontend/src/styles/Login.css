@@ -79,6 +79,17 @@
   font-weight: 600;
 }
 
+.login-success {
+  width: 100%;
+  padding: 13px 14px;
+  border-radius: 16px;
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
@@ -150,6 +161,29 @@
 .password-toggle:hover {
   background: #e2e8f0;
   color: #0f172a;
+}
+
+.login-form-links {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -8px;
+}
+
+.login-form-links a {
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.login-form-links a:hover {
+  text-decoration: underline;
+}
+
+.login-form-links a:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 .login-button {

@@ -57,3 +57,33 @@ test("exclusão de conta inexistente retorna HTTP 404", async () => {
     }
   );
 });
+
+test("paginação agrupada preserva cada turma inteira", () => {
+  const paginas = Registros.distribuirTurmasEmPaginas([
+    { turma_id: 1, turma_nome: "6ºA", total: 30 },
+    { turma_id: 2, turma_nome: "7ºA", total: 25 },
+    { turma_id: 3, turma_nome: "8ºA", total: 20 },
+  ], 50);
+
+  assert.deepEqual(
+    paginas.map((pagina) => pagina.map((turma) => turma.turma_id)),
+    [[1], [2, 3]]
+  );
+  assert.deepEqual(
+    paginas.map((pagina) => pagina.reduce((total, turma) => total + turma.total, 0)),
+    [30, 45]
+  );
+});
+
+test("turma maior que o limite permanece inteira em uma página", () => {
+  const paginas = Registros.distribuirTurmasEmPaginas([
+    { turma_id: 1, turma_nome: "6ºA", total: 60 },
+    { turma_id: 2, turma_nome: "7ºA", total: 10 },
+  ], 50);
+
+  assert.deepEqual(
+    paginas.map((pagina) => pagina.map((turma) => turma.turma_id)),
+    [[1], [2]]
+  );
+  assert.equal(paginas[0][0].total, 60);
+});

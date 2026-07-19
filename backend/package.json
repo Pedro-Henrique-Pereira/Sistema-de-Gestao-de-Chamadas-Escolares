@@ -5,8 +5,12 @@
   "type": "commonjs",
   "scripts": {
     "dev": "nodemon src/server.js",
-    "test": "node --test src/tests/chamadaFluxo.test.js src/tests/frequenciaMetricas.test.js src/tests/atrasoUtils.test.js src/tests/dashboardService.test.js src/tests/usuarioValidation.test.js src/tests/errorHandler.test.js src/tests/filaAutomacaoService.test.js src/tests/registrosModel.test.js src/tests/securityHardening.test.js",
+    "test": "node --test src/tests/chamadaFluxo.test.js src/tests/configuracoesEscola.test.js src/tests/frequenciaMetricas.test.js src/tests/atrasoUtils.test.js src/tests/dashboardService.test.js src/tests/usuarioValidation.test.js src/tests/errorHandler.test.js src/tests/filaAutomacaoService.test.js src/tests/registrosModel.test.js src/tests/securityHardening.test.js src/tests/passwordReset.test.js",
+    "test:password-reset": "node --test src/tests/passwordReset.test.js",
+    "test:password-reset:integration": "node --test src/tests/passwordReset.integration.test.js",
     "migrate:chamada-flow": "node src/database/migrations/aplicarNovoFluxoChamadas.js",
+    "migrate:bloqueio-edicao": "node src/database/migrations/aplicarBloqueioEdicaoChamadas.js",
+    "migrate:password-reset": "node src/database/migrations/aplicarRecuperacaoSenha.js",
     "reset-db": "node src/tests/resetDatabase.js",
     "seed-test": "node src/tests/seedDadosTeste.js",
     "start": "node src/server.js"
@@ -21,7 +25,8 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.22.3"
+    "mysql2": "^3.22.3",
+    "nodemailer": "^9.0.3"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

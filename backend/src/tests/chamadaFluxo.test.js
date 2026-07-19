@@ -7,9 +7,14 @@ const chamadaService = require("../services/chamadaService");
 const professorA = { id: 10, tipo: "professor" };
 const professorB = { id: 11, tipo: "professor" };
 const pedagoga = { id: 20, tipo: "pedagoga" };
+const administracao = { id: 30, tipo: "administracao" };
 const antesDoLimite = { horario_servidor: "07:30:00", horario_limite_atraso: "07:45:00" };
 const exatamenteNoLimite = { horario_servidor: "07:45:00", horario_limite_atraso: "07:45:00" };
 const depoisDoLimite = { horario_servidor: "07:45:01", horario_limite_atraso: "07:45:00" };
+const depoisDoLimiteSemBloqueio = {
+  ...depoisDoLimite,
+  bloquear_edicao_chamadas_apos_horario: false,
+};
 
 function chamada(status = "pendente", versao = 1) {
   return { id: 1, professor_id: professorA.id, status, versao };
@@ -179,4 +184,62 @@ test("15 - falha da auditoria desfaz a alteração antes de liberar a conexão",
     "rollback",
     "release",
   ]);
+});
+
+test("16 - edição não pode introduzir novo atraso depois do horário máximo", () => {
+  const anteriores = [{ aluno_id: 1, status_presenca: "ausente", atrasado: false }];
+  const recebidos = [{ aluno_id: 1, status_presenca: "presente", atrasado: true }];
+  const resultado = fluxo.canApplyStudentDelays(anteriores, recebidos, depoisDoLimite);
+
+  assert.equal(resultado.permitido, false);
+  assert.equal(resultado.mensagem, fluxo.MENSAGENS.ATRASO_FORA_DO_HORARIO);
+});
+
+test("17 - edição preserva atraso já registrado mesmo depois do horário máximo", () => {
+  const anteriores = [{ aluno_id: 1, status_presenca: "presente", atrasado: true }];
+  const recebidos = [{ aluno_id: 1, status_presenca: "presente", atrasado: true }];
+
+  assert.equal(fluxo.canApplyStudentDelays(anteriores, recebidos, depoisDoLimite).permitido, true);
+});
+
+test("18 - novo atraso continua permitido até o horário máximo inclusive", () => {
+  const anteriores = [{ aluno_id: 1, status_presenca: "ausente", atrasado: false }];
+  const recebidos = [{ aluno_id: 1, status_presenca: "presente", atrasado: true }];
+
+  assert.equal(fluxo.canApplyStudentDelays(anteriores, recebidos, exatamenteNoLimite).permitido, true);
+});
+
+test("19 - configuração ausente preserva o bloqueio seguro para bancos existentes", () => {
+  assert.equal(fluxo.isEditLockEnabled(depoisDoLimite), true);
+  assert.equal(fluxo.canPedagogueEditCall(chamada("confirmada"), pedagoga, depoisDoLimite).permitido, false);
+});
+
+test("20 - bloqueio desativado libera edição confirmada somente para pedagoga", () => {
+  assert.equal(fluxo.canPedagogueEditCall(chamada("confirmada"), pedagoga, depoisDoLimiteSemBloqueio).permitido, true);
+  assert.equal(fluxo.statusEfetivo(chamada("confirmada"), depoisDoLimiteSemBloqueio, pedagoga), "CONFIRMADA");
+  assert.equal(fluxo.canPedagogueEditCall(chamada("confirmada"), administracao, depoisDoLimiteSemBloqueio).permitido, false);
+  assert.equal(fluxo.canProfessorEditCall(chamada("confirmada"), professorA).permitido, false);
+});
+
+test("21 - pedagoga pode transformar falta em atraso após o limite quando o bloqueio está desativado", () => {
+  const anteriores = [{ aluno_id: 1, status_presenca: "ausente", atrasado: false }];
+  const recebidos = [{ aluno_id: 1, status_presenca: "presente", atrasado: true }];
+
+  assert.equal(
+    fluxo.canApplyStudentDelays(anteriores, recebidos, depoisDoLimiteSemBloqueio, pedagoga).permitido,
+    true
+  );
+  assert.equal(
+    fluxo.canApplyStudentDelays(anteriores, recebidos, depoisDoLimiteSemBloqueio, professorA).permitido,
+    false
+  );
+  assert.equal(
+    fluxo.canApplyStudentDelays(anteriores, recebidos, depoisDoLimiteSemBloqueio, administracao).permitido,
+    false
+  );
+});
+
+test("22 - cálculo de atraso continua igual e nunca gera valor negativo", () => {
+  assert.equal(fluxo.calculateStudentDelay("07:10:00", "08:05:00"), 55);
+  assert.equal(fluxo.calculateStudentDelay("08:05:00", "07:10:00"), 0);
 });

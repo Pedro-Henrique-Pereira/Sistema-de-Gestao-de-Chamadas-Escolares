@@ -887,6 +887,206 @@ button:disabled {
   }
 }
 
+/* Detalhe progressivo das chamadas confirmadas */
+
+.confirmed-call-card {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.confirmed-call-card.details-open {
+  border-color: #b9cbea;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.08);
+}
+
+.confirmed-call-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.confirmed-call-actions > button {
+  min-height: 44px;
+  margin: 0;
+}
+
+.confirmed-call-view-button {
+  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #c8d5e6;
+  border-radius: 10px;
+  background: transparent;
+  color: #36536f;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.confirmed-call-view-button:hover,
+.confirmed-call-view-button[aria-expanded="true"] {
+  border-color: #9fb5d2;
+  background: #eef4fb;
+  color: var(--primary-dark);
+}
+
+.confirmed-call-view-button svg:last-child {
+  transition: transform 0.18s ease;
+}
+
+.confirmed-call-view-button svg.rotated {
+  transform: rotate(180deg);
+}
+
+.confirmed-call-view-button:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.18);
+  outline-offset: 2px;
+}
+
+.confirmed-call-details {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.confirmed-call-loading {
+  padding: 20px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.confirmed-student-list {
+  display: grid;
+  gap: 8px;
+}
+
+.confirmed-student-row {
+  min-width: 0;
+  padding: 11px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.confirmed-student-name {
+  min-width: 0;
+}
+
+.confirmed-student-name strong,
+.confirmed-student-name small,
+.confirmed-student-status strong,
+.confirmed-student-status small {
+  display: block;
+}
+
+.confirmed-student-name strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.confirmed-student-name small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.confirmed-student-status {
+  min-width: 112px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  text-align: right;
+}
+
+.confirmed-student-status strong {
+  font-size: 12px;
+}
+
+.confirmed-student-status small {
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.confirmed-student-status.presente {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.confirmed-student-status.ausente {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.confirmed-student-status.justificada {
+  background: var(--warning-soft);
+  color: #8a5b00;
+}
+
+.confirmed-student-reason {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 9px 10px;
+  border-left: 3px solid var(--warning);
+  border-radius: 8px;
+  background: #fffaf0;
+  color: #6b4f1d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .confirmed-call-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .confirmed-call-actions > .btn-secondary {
+    flex: 1 1 190px;
+  }
+}
+
+@media (max-width: 480px) {
+  .confirmed-call-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .confirmed-call-actions > button,
+  .confirmed-call-view-button {
+    width: 100%;
+  }
+
+  .confirmed-student-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .confirmed-student-status {
+    width: fit-content;
+    min-width: 0;
+    text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirmed-call-card,
+  .confirmed-call-view-button svg:last-child {
+    transition: none;
+  }
+}
+
 /* Chamada pedagógica com o mesmo padrão visual da tela do professor */
 .pedagoga-call-title {
   margin: 18px 0 12px;
@@ -1679,4 +1879,273 @@ button:focus-visible {
 .arrival-window-card.closed {
   border-left-color: var(--success);
   background: var(--success-soft);
+}
+
+/* CHAMADAS PEDAGÓGICAS: HIERARQUIA DE AÇÕES */
+
+.attendance-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  background: var(--surface);
+}
+
+.attendance-header .attendance-toggle {
+  grid-template-columns: minmax(165px, 0.8fr) minmax(270px, 1.5fr) auto;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+.attendance-expand-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  color: var(--primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.attendance-expand-label svg {
+  transition: transform 0.2s ease;
+}
+
+.attendance-expand-label svg.rotated {
+  transform: rotate(180deg);
+}
+
+.attendance-header .accordion-actions {
+  position: relative;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.attendance-header .edit-attendance-button,
+.student-action-bar .justify-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.attendance-header .edit-attendance-button {
+  min-height: 44px;
+}
+
+.attendance-more-actions {
+  position: relative;
+}
+
+.attendance-accordion:has(.attendance-more-actions[open]) {
+  position: relative;
+  z-index: 5;
+  overflow: visible;
+}
+
+.attendance-more-actions summary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 13px;
+  border: 1px solid #d7e1ed;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.attendance-more-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.attendance-more-actions[open] summary,
+.attendance-more-actions summary:hover {
+  border-color: #b9c9db;
+  background: #eef4fb;
+  color: #172033;
+}
+
+.attendance-more-actions summary:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.2);
+  outline-offset: 2px;
+}
+
+.attendance-actions-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: min(280px, calc(100vw - 48px));
+  gap: 5px;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: #ffffff;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16);
+}
+
+.attendance-actions-menu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.attendance-actions-menu button:hover:not(:disabled) {
+  background: #eef4fb;
+}
+
+.attendance-actions-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.attendance-actions-menu button svg {
+  margin-top: 2px;
+  color: var(--primary-dark);
+}
+
+.attendance-actions-menu button span,
+.attendance-actions-menu button strong,
+.attendance-actions-menu button small {
+  display: block;
+  min-width: 0;
+}
+
+.attendance-actions-menu button strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.attendance-actions-menu button small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.student-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.student-action-bar .justify-toggle {
+  min-height: 44px;
+  width: auto;
+}
+
+@media (max-width: 1050px) {
+  .attendance-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .attendance-header .attendance-toggle {
+    border-right: 0;
+  }
+
+  .attendance-header .accordion-actions {
+    justify-content: flex-end;
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 760px) {
+  .attendance-header .attendance-toggle {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 15px;
+  }
+
+  .attendance-expand-label {
+    justify-content: flex-start;
+  }
+
+  .attendance-header .accordion-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    padding: 12px 15px;
+  }
+
+  .attendance-header .edit-attendance-button,
+  .attendance-more-actions,
+  .attendance-more-actions summary {
+    width: 100%;
+  }
+
+  .attendance-actions-menu {
+    width: min(280px, calc(100vw - 48px));
+  }
+
+  .attendance-accordion.open .attendance-body {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 520px) {
+  .attendance-toggle-info span {
+    display: block;
+    line-height: 1.45;
+  }
+
+  .attendance-summary span {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+
+  .attendance-actions-menu {
+    width: min(280px, calc(100vw - 48px));
+  }
+
+  .student-row.improved {
+    gap: 12px;
+    padding: 15px;
+  }
+
+  .student-action-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .student-action-bar .justify-toggle {
+    width: 100%;
+  }
+
+  .justify-box.improved {
+    margin-top: 10px;
+    padding: 13px;
+  }
+
+  .justify-box textarea {
+    min-height: 96px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attendance-expand-label svg {
+    transition: none;
+  }
 }
