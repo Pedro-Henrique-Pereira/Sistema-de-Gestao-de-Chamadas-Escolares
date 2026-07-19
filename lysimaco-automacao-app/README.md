@@ -22,16 +22,16 @@ Copie `.env.example` para `.env` e defina:
 
 ```env
 API_BASE_URL=https://api.seu-dominio.com
-AUTOMATION_MACHINE_TOKENS={"1":"token-unico-maquina-1-com-32-caracteres"}
+AUTOMATION_MACHINE_TOKENS={"1":"token-exclusivo-maquina-1-troque-aqui","2":"token-exclusivo-maquina-2-troque-aqui","3":"token-exclusivo-maquina-3-troque-aqui","4":"token-exclusivo-maquina-4-troque-aqui","5":"token-exclusivo-maquina-5-troque-aqui"}
 AUTOMATION_APP_VERSION=2.0.0
 AUTOMATION_WORKER_ID=computador-escola
 NUMERO_MAQUINA=1
 ```
 
-Cada máquina possui um token exclusivo, igual ao par correspondente de
-`AUTOMATION_MACHINE_TOKENS` no backend. Uma instalação pode guardar mais de um
-par para permitir a troca fácil pela interface, mas os tokens continuam
-distintos e a credencial selecionada é sempre a da máquina escolhida.
+Os dois arquivos `.env` devem conter os cinco pares exatamente iguais. Cada
+máquina possui seu próprio token: Máquinas 1 e 2 são das pedagogas; Máquinas 3,
+4 e 5 são dos administradores. Os tokens continuam distintos e o aplicativo
+sempre utiliza somente a credencial correspondente à máquina selecionada.
 
 URLs remotas devem usar HTTPS. HTTP é aceito automaticamente apenas em
 `localhost`; em rede local controlada, a liberação precisa ser explícita com

@@ -14,11 +14,13 @@ Navegador -> backend web -> fila persistente -> aplicativo desktop -> WhatsApp
 
 ## Autenticação das máquinas
 
-Configure `AUTOMATION_MACHINE_TOKENS` no backend como JSON. Cada máquina deve
-possuir uma credencial exclusiva com pelo menos 32 caracteres:
+Configure `AUTOMATION_MACHINE_TOKENS` no backend como JSON. As cinco máquinas
+devem existir, cada uma com credencial exclusiva de pelo menos 32 caracteres.
+Máquinas 1 e 2 pertencem ao fluxo das pedagogas; Máquinas 3, 4 e 5 pertencem ao
+fluxo dos administradores:
 
 ```env
-AUTOMATION_MACHINE_TOKENS={"1":"token-unico-maquina-1-com-32-caracteres","2":"token-unico-maquina-2-com-32-caracteres"}
+AUTOMATION_MACHINE_TOKENS={"1":"token-exclusivo-maquina-1-troque-aqui","2":"token-exclusivo-maquina-2-troque-aqui","3":"token-exclusivo-maquina-3-troque-aqui","4":"token-exclusivo-maquina-4-troque-aqui","5":"token-exclusivo-maquina-5-troque-aqui"}
 ```
 
 O aplicativo envia:
@@ -130,7 +132,7 @@ npm start
 Variáveis:
 
 ```env
-AUTOMATION_MACHINE_TOKENS={}
+AUTOMATION_MACHINE_TOKENS={"1":"token-exclusivo-maquina-1-troque-aqui","2":"token-exclusivo-maquina-2-troque-aqui","3":"token-exclusivo-maquina-3-troque-aqui","4":"token-exclusivo-maquina-4-troque-aqui","5":"token-exclusivo-maquina-5-troque-aqui"}
 AUTOMATION_DELIVERY_MAX_ATTEMPTS=3
 AUTOMATION_DELIVERY_LEASE_SECONDS=300
 AUTOMATION_DELIVERY_BATCH_SIZE=25
