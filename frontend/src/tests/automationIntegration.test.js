@@ -9,6 +9,8 @@ const modal = fs.readFileSync(new URL("../components/AutomacaoFeedbackModal.jsx"
 
 test("frontend cria tarefas somente pelo backend do Sistema de Chamadas", () => {
   assert.match(service, /\/api\/automation\/tasks\/attendance-notifications/);
+  assert.match(service, /attendance-notifications\/batch-preview/);
+  assert.match(service, /attendance-notifications\/batch/);
   assert.match(service, /\/api\/automation\/tasks\/group-messages/);
   assert.match(service, /\/api\/automation\/queues\/\$\{encodeURIComponent\(machineId\)\}\/clear/);
   assert.doesNotMatch(service, /automation-worker/);
@@ -27,6 +29,22 @@ test("pedagoga cria uma tarefa por chamada confirmada nas máquinas 1 ou 2", () 
   assert.match(pedagoga, /delete requestIdsFaltasRef\.current\[chamada\.id\]/);
 });
 
+
+test("pedagoga confirma e acompanha notificacoes de todas as turmas na mesma maquina", () => {
+  assert.match(pedagoga, /Notificar responsáveis de todas as turmas/);
+  assert.match(pedagoga, /prepararAutomacaoTodasTurmas/);
+  assert.match(pedagoga, /confirmarAutomacaoTodasTurmas/);
+  assert.match(pedagoga, /requestIdLoteFaltasRef\.current \|\|=/);
+  assert.match(pedagoga, /machineId: preview\.machineId/);
+  assert.match(pedagoga, /totalEligibleClasses/);
+  assert.match(pedagoga, /totalAbsentStudents/);
+  assert.match(pedagoga, /totalAlreadyNotified/);
+  assert.match(pedagoga, /totalAlreadyPending/);
+  assert.match(pedagoga, /totalAlreadyProcessing/);
+  assert.match(pedagoga, /totalInvalidRecipients/);
+  assert.match(pedagoga, /aria-modal="true"/);
+  assert.match(pedagoga, /disabled=\{processandoTodasTurmas \|\| loading/);
+});
 test("editor da mensagem informa o salvamento e mantém falhas visíveis no modal", () => {
   assert.match(pedagoga, /salvandoMensagemWhatsapp/);
   assert.match(pedagoga, /erroMensagemWhatsapp/);

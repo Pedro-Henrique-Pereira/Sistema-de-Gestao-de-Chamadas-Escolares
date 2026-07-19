@@ -43,6 +43,53 @@ Todas as rotas abaixo exigem a sessão web e autorização no backend:
   - apenas chamadas confirmadas;
   - Máquinas 1 ou 2;
   - cria uma entrega individual por aluno ausente.
+- `GET /api/automation/tasks/attendance-notifications/batch-preview`
+  - somente pedagoga;
+  - exige `machineId` da Máquina 1 ou 2 e aceita `referenceDate=AAAA-MM-DD`;
+  - retorna turmas analisadas, elegíveis, ausentes e contatos inválidos sem criar tarefas.
+- `POST /api/automation/tasks/attendance-notifications/batch`
+  - somente pedagoga;
+  - usa exclusivamente a máquina informada, sem distribuir turmas;
+  - localiza novamente as chamadas confirmadas da data no backend;
+  - cria uma tarefa separada por turma elegível e uma entrega por aluno ausente;
+  - continua nas demais turmas quando uma delas falha;
+  - retorna resumo e detalhes agrupados por turma.
+
+Exemplo de criação do lote:
+
+```json
+{
+  "requestId": "attendance-batch-uuid-unico",
+  "machineId": "machine-1",
+  "referenceDate": "2026-07-19"
+}
+```
+
+O `requestId` do lote gera uma chave filha determinística para cada chamada.
+Repetir a mesma requisição reutiliza as tarefas já criadas. Requisições novas
+continuam protegidas por `automacao_deduplicacao`, que diferencia destinatário
+já enviado, pendente e em processamento. Falha final e cancelamento antes do
+envio permitem uma tentativa posterior.
+
+Resumo principal da resposta:
+
+```json
+{
+  "machineNumber": 1,
+  "totalClassesAnalyzed": 10,
+  "totalEligibleClasses": 8,
+  "totalIgnoredClasses": 2,
+  "totalAbsentStudents": 42,
+  "totalTasksAddedToQueue": 8,
+  "totalAlreadyNotified": 7,
+  "totalAlreadyPending": 2,
+  "totalAlreadyProcessing": 1,
+  "totalInvalidRecipients": 2,
+  "totalErrors": 2,
+  "taskIds": [101, 102]
+}
+```
+
 - `POST /api/automation/tasks/group-messages`
   - somente administrador;
   - Máquinas 3, 4 ou 5;

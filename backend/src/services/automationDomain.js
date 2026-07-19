@@ -18,6 +18,7 @@ const PUBLIC_ERROR_MESSAGES = Object.freeze({
   ATTENDANCE_NOT_ELIGIBLE: "A ausência deixou de ser elegível para notificação.",
   CANCELLED: "Envio cancelado por usuário autorizado.",
   DUPLICATE_ALREADY_SENT: "O responsável já foi notificado sobre esta ausência.",
+  DUPLICATE_PENDING: "Esta notifica\u00e7\u00e3o j\u00e1 est\u00e1 aguardando na fila.",
   DUPLICATE_IN_PROGRESS: "Esta notificação já está pendente ou em processamento.",
 });
 

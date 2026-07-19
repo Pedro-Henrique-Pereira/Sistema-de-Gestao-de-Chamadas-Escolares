@@ -22,6 +22,9 @@ const {
   validarWorkerId,
 } = require("../services/automationWorkerService");
 const {
+  attendanceBatchChildRequestId,
+  normalizeAttendanceBatchDate,
+  summarizeAttendanceBatchRows,
   duplicateBlockCode,
   ensurePersonalizedTemplate,
   publicDeliveryStatus,
@@ -230,7 +233,7 @@ test("deduplicação bloqueia sucesso e entregas ativas, mas libera falha final 
   assert.equal(duplicateBlockCode({
     delivery_status: "pendente",
     task_status: "pendente",
-  }, cfg), "DUPLICATE_IN_PROGRESS");
+  }, cfg), "DUPLICATE_PENDING");
   assert.equal(duplicateBlockCode({
     delivery_status: "processando",
     task_status: "executando",
@@ -253,6 +256,69 @@ test("deduplicação bloqueia sucesso e entregas ativas, mas libera falha final 
   }, cfg), null);
 });
 
+
+test("lote seleciona somente chamadas confirmadas com destinatarios validos", () => {
+  const rows = [
+    {
+      attendance_id: 10, turma_id: 1, turma_nome: "7A", data_chamada: "2026-07-19",
+      chamada_status: "confirmada", frequencia_id: 101, aluno_id: 1,
+      responsavel_id: 201, responsavel_contato: "(44) 99913-5827",
+    },
+    {
+      attendance_id: 10, turma_id: 1, turma_nome: "7A", data_chamada: "2026-07-19",
+      chamada_status: "confirmada", frequencia_id: 102, aluno_id: 2,
+      responsavel_id: null, responsavel_contato: null,
+    },
+    {
+      attendance_id: 11, turma_id: 2, turma_nome: "8A", data_chamada: "2026-07-19",
+      chamada_status: "confirmada", frequencia_id: null, aluno_id: null,
+      responsavel_id: null, responsavel_contato: null,
+    },
+    {
+      attendance_id: 12, turma_id: 3, turma_nome: "9A", data_chamada: "2026-07-19",
+      chamada_status: "cancelada", frequencia_id: 103, aluno_id: 3,
+      responsavel_id: 203, responsavel_contato: "44999135827",
+    },
+  ];
+  const classes = summarizeAttendanceBatchRows(rows, { countryCode: "55" });
+  assert.equal(classes.length, 3);
+  assert.deepEqual(
+    classes.map(({ attendanceId, eligible, absentStudents, validRecipients, invalidRecipients }) => ({
+      attendanceId, eligible, absentStudents, validRecipients, invalidRecipients,
+    })),
+    [
+      { attendanceId: 10, eligible: true, absentStudents: 2, validRecipients: 1, invalidRecipients: 1 },
+      { attendanceId: 11, eligible: false, absentStudents: 0, validRecipients: 0, invalidRecipients: 0 },
+      { attendanceId: 12, eligible: false, absentStudents: 1, validRecipients: 1, invalidRecipients: 0 },
+    ]
+  );
+});
+
+test("lote usa data valida e requestId filho deterministico por chamada", () => {
+  assert.equal(normalizeAttendanceBatchDate("2026-07-19"), "2026-07-19");
+  assert.equal(normalizeAttendanceBatchDate(""), null);
+  assert.throws(() => normalizeAttendanceBatchDate("2026-02-30"), /invalida/);
+  const first = attendanceBatchChildRequestId("attendance-batch-request-1234", 10);
+  assert.equal(first, attendanceBatchChildRequestId("attendance-batch-request-1234", 10));
+  assert.notEqual(first, attendanceBatchChildRequestId("attendance-batch-request-1234", 11));
+  assert.match(first, /^attendance-batch-[a-f0-9]{32}$/);
+});
+
+test("rota em lote e exclusiva da pedagoga, auditada e preserva uma maquina", () => {
+  const service = fs.readFileSync(path.join(ROOT, "backend/src/services/automationTaskService.js"), "utf8");
+  const routes = fs.readFileSync(path.join(ROOT, "backend/src/routes/automation.routes.js"), "utf8");
+  assert.match(routes, /attendance-notifications\/batch-preview/);
+  assert.match(routes, /attendance-notifications\/batch/);
+  assert.match(routes, /AUTOMACAO_FALTAS_LOTE_CRIADO/);
+  assert.match(routes, /autorizar\("pedagoga"\)/);
+  assert.match(service, /for \(const classItem of preview\.classes\.filter/);
+  assert.match(service, /machineId: preview\.machineId/);
+  assert.match(service, /attendanceBatchChildRequestId/);
+  assert.match(service, /skipIfAllDuplicates: true/);
+  assert.match(service, /duplicateCodes\.every\(Boolean\)/);
+  assert.match(service, /taskStatus: "duplicate_blocked"/);
+  assert.match(service, /FOR UPDATE/);
+});
 test("resultado público separa duplicidade, fila existente e falha real", () => {
   assert.equal(publicDeliveryStatus({
     status: "ignorado",

@@ -163,6 +163,14 @@ O sistema tem como objetivo:
 * Gestão de justificativas.
 * Histórico escolar.
 
+### Notificações de ausência
+
+* Envio individual por chamada confirmada ou envio de todas as turmas elegíveis.
+* Confirmação obrigatória com máquina, turmas e total de ausentes.
+* Todas as tarefas do lote permanecem na mesma Máquina 1 ou 2 selecionada.
+* Resultado agrupado por turma, com duplicidades, pendências e contatos inválidos.
+* Proteção persistente contra mensagens repetidas e processamento concorrente.
+
 ### Painel de Alunos Atrasados
 
 Implementado através de:

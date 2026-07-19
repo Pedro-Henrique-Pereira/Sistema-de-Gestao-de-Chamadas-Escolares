@@ -13,6 +13,19 @@ export function criarTarefaFaltas({ requestId, machineId, attendanceId }) {
   });
 }
 
+export function previsualizarTarefasFaltasEmLote({ machineId, referenceDate }) {
+  return apiFetch("/api/automation/tasks/attendance-notifications/batch-preview", {
+    params: { machineId, referenceDate },
+  });
+}
+
+export function criarTarefasFaltasEmLote({ requestId, machineId, referenceDate }) {
+  return apiFetch("/api/automation/tasks/attendance-notifications/batch", {
+    method: "POST",
+    body: JSON.stringify({ requestId, machineId, referenceDate }),
+  });
+}
+
 export function criarTarefaGrupos({ requestId, machineId, groups, allGroups, message }) {
   return apiFetch("/api/automation/tasks/group-messages", {
     method: "POST",

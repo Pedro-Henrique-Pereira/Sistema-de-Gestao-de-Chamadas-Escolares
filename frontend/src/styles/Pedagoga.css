@@ -2192,3 +2192,207 @@ button:focus-visible {
     transition: none;
   }
 }
+
+.automation-batch-button {
+  min-height: 42px;
+  border: 1px solid #166534;
+  border-radius: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #166534, #15803d);
+  color: #ffffff;
+  font-weight: 800;
+  line-height: 1.25;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(21, 128, 61, 0.18);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+.automation-batch-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(21, 128, 61, 0.24);
+}
+
+.automation-batch-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+  box-shadow: none;
+}
+
+.automation-batch-backdrop {
+  z-index: 1320;
+}
+
+.automation-batch-modal {
+  width: min(780px, 100%);
+  max-height: min(88vh, 820px);
+  overflow-y: auto;
+  display: grid;
+  gap: 18px;
+  border: 1px solid #c7d8ed;
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.28);
+}
+
+.automation-batch-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+}
+
+.automation-batch-heading h2,
+.automation-batch-heading p {
+  margin: 0;
+}
+
+.automation-batch-heading p {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.automation-batch-icon {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: #e0ecff;
+  color: var(--primary-dark);
+}
+
+.automation-batch-icon--success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.automation-batch-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.automation-batch-metrics--preview {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.automation-batch-metrics > div {
+  min-height: 78px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 12px;
+  border: 1px solid #d8e4f1;
+  border-radius: 12px;
+  background: #f7faff;
+}
+
+.automation-batch-metrics strong {
+  color: var(--primary-dark);
+  font-size: 1.28rem;
+}
+
+.automation-batch-metrics span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.automation-batch-notice {
+  margin: 0;
+  padding: 13px 14px;
+  border-left: 4px solid #16a34a;
+  border-radius: 10px;
+  background: #f0fdf4;
+  color: #14532d;
+  line-height: 1.5;
+}
+
+.automation-batch-date {
+  margin: 0;
+  color: var(--muted);
+}
+
+.automation-batch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.automation-batch-class-list {
+  display: grid;
+  gap: 8px;
+  max-height: 270px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.automation-batch-class-list details {
+  border: 1px solid #d8e4f1;
+  border-radius: 11px;
+  background: #ffffff;
+}
+
+.automation-batch-class-list summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  cursor: pointer;
+}
+
+.automation-batch-status {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.automation-batch-status.queued { background: #dcfce7; color: #166534; }
+.automation-batch-status.checked { background: #e0ecff; color: #1e40af; }
+.automation-batch-status.ignored { background: #f1f5f9; color: #475569; }
+
+.automation-batch-class-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 14px;
+  padding: 0 13px 13px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.automation-batch-class-detail p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #b91c1c;
+}
+
+@media (max-width: 720px) {
+  .automation-actions {
+    flex-wrap: wrap;
+  }
+
+  .automation-batch-button {
+    width: 100%;
+  }
+
+  .automation-batch-metrics,
+  .automation-batch-metrics--preview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .automation-batch-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .automation-batch-actions button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .automation-batch-button {
+    transition: none;
+  }
+}

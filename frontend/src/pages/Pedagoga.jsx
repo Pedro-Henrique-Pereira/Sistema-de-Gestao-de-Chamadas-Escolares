@@ -16,6 +16,8 @@ import { pedagogaService } from "../services/pedagogaService";
 import {
   criarRequestId,
   criarTarefaFaltas,
+  criarTarefasFaltasEmLote,
+  previsualizarTarefasFaltasEmLote,
   limparFilaMaquina,
   listarMaquinasAutomacao,
   listarTarefasAutomacao,
@@ -131,9 +133,14 @@ function Pedagoga() {
   const [tarefasAutomacaoRecentes, setTarefasAutomacaoRecentes] = useState([]);
   const [salvandoMaquinaPadrao, setSalvandoMaquinaPadrao] = useState(false);
   const [limpandoFilaAutomacao, setLimpandoFilaAutomacao] = useState(false);
+  const [processandoTodasTurmas, setProcessandoTodasTurmas] = useState(false);
+  const [loteAutomacaoModal, setLoteAutomacaoModal] = useState({
+    aberto: false, etapa: "", preview: null, summary: null, erro: "",
+  });
   const [automacaoModal, setAutomacaoModal] = useState({ aberto: false, ids: [] });
   const requestIdsFaltasRef = useRef({});
   const chamadasRefs = useRef({});
+  const requestIdLoteFaltasRef = useRef("");
   const justificativasRefs = useRef({});
   const responsaveisRefs = useRef({});
   const primeiraBuscaResponsavelAplicadaRef = useRef(false);
@@ -701,6 +708,80 @@ function Pedagoga() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function prepararAutomacaoTodasTurmas() {
+    if (processandoTodasTurmas) return;
+    const maquinaSelecionada = Number(maquinaPadraoChamadas);
+    if (!maquinasPermitidasChamadas.includes(maquinaSelecionada)) {
+      setMensagem("Selecione a máquina de destino antes de notificar todas as turmas.");
+      return;
+    }
+
+    try {
+      setProcessandoTodasTurmas(true);
+      const { preview } = await previsualizarTarefasFaltasEmLote({
+        machineId: `machine-${maquinaSelecionada}`,
+        referenceDate: hojeISO(),
+      });
+      if (!preview?.totalEligibleClasses) {
+        setMensagem("Nenhuma turma confirmada possui responsáveis aptos para notificação hoje.");
+        return;
+      }
+      setLoteAutomacaoModal({
+        aberto: true,
+        etapa: "confirmacao",
+        preview,
+        summary: null,
+        erro: "",
+      });
+    } catch (error) {
+      setMensagem(error.message || "Não foi possível analisar as turmas elegíveis.");
+    } finally {
+      setProcessandoTodasTurmas(false);
+    }
+  }
+
+  async function confirmarAutomacaoTodasTurmas() {
+    if (processandoTodasTurmas || !loteAutomacaoModal.preview) return;
+    const preview = loteAutomacaoModal.preview;
+    try {
+      setProcessandoTodasTurmas(true);
+      setLoteAutomacaoModal((current) => ({ ...current, erro: "" }));
+      requestIdLoteFaltasRef.current ||= criarRequestId(
+        `attendance-batch-${preview.referenceDate}`
+      );
+      const data = await criarTarefasFaltasEmLote({
+        requestId: requestIdLoteFaltasRef.current,
+        machineId: preview.machineId,
+        referenceDate: preview.referenceDate,
+      });
+      if (!data?.summary) throw new Error("O backend não retornou o resumo do processamento.");
+      requestIdLoteFaltasRef.current = "";
+      setLoteAutomacaoModal({
+        aberto: true,
+        etapa: "resultado",
+        preview,
+        summary: data.summary,
+        erro: "",
+      });
+      setMensagem(data.message || "Processamento das turmas concluído.");
+      await Promise.all([carregarContextoAutomacao(), carregarChamadas()])
+        .catch((error) => registrarErroCliente("pedagoga.atualizarAposLote", error));
+    } catch (error) {
+      setLoteAutomacaoModal((current) => ({
+        ...current,
+        erro: error.message || "Não foi possível criar as tarefas do lote.",
+      }));
+    } finally {
+      setProcessandoTodasTurmas(false);
+    }
+  }
+
+  function acompanharTarefasDoLote() {
+    const ids = loteAutomacaoModal.summary?.taskIds || [];
+    setLoteAutomacaoModal({ aberto: false, etapa: "", preview: null, summary: null, erro: "" });
+    if (ids.length) setAutomacaoModal({ aberto: true, ids });
   }
 
   async function salvarMensagemWhatsapp() {
@@ -1347,6 +1428,19 @@ function Pedagoga() {
                 </div>
                 <div className="automation-actions">
                   <button
+                    className="automation-batch-button"
+                    type="button"
+                    onClick={prepararAutomacaoTodasTurmas}
+                    disabled={processandoTodasTurmas || loading
+                      || !maquinasPermitidasChamadas.includes(Number(maquinaPadraoChamadas))
+                      || chamadasConfirmadas.length === 0}
+                    title={!maquinasPermitidasChamadas.includes(Number(maquinaPadraoChamadas))
+                      ? "Selecione a Máquina 1 ou 2 antes de continuar."
+                      : "Analisa as chamadas confirmadas e adiciona cada turma à mesma fila."}
+                  >
+                    {processandoTodasTurmas ? "Analisando turmas..." : "Notificar responsáveis de todas as turmas"}
+                  </button>
+                  <button
                     className="automation-edit-button"
                     type="button"
                     onClick={() => {
@@ -1463,6 +1557,108 @@ function Pedagoga() {
               )}
             </div>
 
+
+            {loteAutomacaoModal.aberto && (
+              <div className="modal-backdrop automation-batch-backdrop">
+                <section
+                  className="content-card modal-card automation-batch-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="automation-batch-title"
+                >
+                  {loteAutomacaoModal.etapa === "confirmacao" && (
+                    <>
+                      <div className="automation-batch-heading">
+                        <span className="automation-batch-icon" aria-hidden="true"><ListChecks size={22} /></span>
+                        <div>
+                          <h2 id="automation-batch-title">Confirmar notificação de todas as turmas</h2>
+                          <p>As tarefas usarão somente a Máquina {loteAutomacaoModal.preview.machineNumber}.</p>
+                        </div>
+                      </div>
+                      <div className="automation-batch-metrics automation-batch-metrics--preview">
+                        <div><strong>{loteAutomacaoModal.preview.totalEligibleClasses}</strong><span>turmas elegíveis</span></div>
+                        <div><strong>{loteAutomacaoModal.preview.totalAbsentStudents}</strong><span>alunos ausentes</span></div>
+                        <div><strong>{loteAutomacaoModal.preview.totalValidRecipients}</strong><span>contatos aptos</span></div>
+                        <div><strong>{loteAutomacaoModal.preview.totalInvalidRecipients}</strong><span>contatos incompletos</span></div>
+                      </div>
+                      <p className="automation-batch-notice">
+                        Responsáveis já notificados hoje não receberão outra mensagem. Cada turma será
+                        adicionada, em ordem, à fila da Máquina {loteAutomacaoModal.preview.machineNumber}.
+                      </p>
+                      <p className="automation-batch-date">
+                        Data analisada: <strong>{formatarDataChamada(loteAutomacaoModal.preview.referenceDate)}</strong>
+                      </p>
+                      {loteAutomacaoModal.erro && <p className="whatsapp-message-error" role="alert">{loteAutomacaoModal.erro}</p>}
+                      <div className="automation-batch-actions">
+                        <button
+                          className="btn-secondary"
+                          type="button"
+                          disabled={processandoTodasTurmas}
+                          onClick={() => {
+                            requestIdLoteFaltasRef.current = "";
+                            setLoteAutomacaoModal({ aberto: false, etapa: "", preview: null, summary: null, erro: "" });
+                          }}
+                        >
+                          Cancelar
+                        </button>
+                        <button className="btn-primary" type="button" disabled={processandoTodasTurmas} onClick={confirmarAutomacaoTodasTurmas}>
+                          {processandoTodasTurmas ? "Adicionando à fila..." : `Confirmar na Máquina ${loteAutomacaoModal.preview.machineNumber}`}
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {loteAutomacaoModal.etapa === "resultado" && (
+                    <>
+                      <div className="automation-batch-heading">
+                        <span className="automation-batch-icon automation-batch-icon--success" aria-hidden="true"><CheckCircle2 size={22} /></span>
+                        <div>
+                          <h2 id="automation-batch-title">Resultado do processamento em lote</h2>
+                          <p>Máquina {loteAutomacaoModal.summary.machineNumber} · {formatarDataChamada(loteAutomacaoModal.summary.referenceDate)}</p>
+                        </div>
+                      </div>
+                      <div className="automation-batch-metrics">
+                        <div><strong>{loteAutomacaoModal.summary.totalClassesAnalyzed}</strong><span>analisadas</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalEligibleClasses}</strong><span>elegíveis</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalIgnoredClasses}</strong><span>turmas ignoradas</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalAbsentStudents}</strong><span>alunos ausentes</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalTasksAddedToQueue}</strong><span>tarefas na fila</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalAlreadyNotified}</strong><span>já notificados</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalAlreadyPending}</strong><span>já pendentes</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalAlreadyProcessing}</strong><span>em processamento</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalInvalidRecipients}</strong><span>sem contato válido</span></div>
+                        <div><strong>{loteAutomacaoModal.summary.totalErrors}</strong><span>erros</span></div>
+                      </div>
+                      <div className="automation-batch-class-list">
+                        {(loteAutomacaoModal.summary.classes || []).map((item) => (
+                          <details key={item.attendanceId}>
+                            <summary>
+                              <strong>{item.className}</strong>
+                              <span className={`automation-batch-status ${item.addedToQueue ? "queued" : item.eligible ? "checked" : "ignored"}`}>
+                                {item.addedToQueue ? "Adicionada" : item.eligible ? "Verificada" : "Ignorada"}
+                              </span>
+                            </summary>
+                            <div className="automation-batch-class-detail">
+                              <span>Ausentes: {item.absentStudents}</span>
+                              <span>Já notificados: {item.alreadyNotified || 0}</span>
+                              <span>Já na fila: {Number(item.alreadyPending || 0) + Number(item.alreadyProcessing || 0)}</span>
+                              <span>Sem contato válido: {item.invalidRecipients || 0}</span>
+                              {item.errorMessage && <p role="alert">{item.errorMessage}</p>}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                      <div className="automation-batch-actions">
+                        <button className="btn-secondary" type="button" onClick={() => setLoteAutomacaoModal({ aberto: false, etapa: "", preview: null, summary: null, erro: "" })}>Fechar</button>
+                        {loteAutomacaoModal.summary.taskIds?.length > 0 && (
+                          <button className="btn-primary" type="button" onClick={acompanharTarefasDoLote}>Acompanhar tarefas</button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </section>
+              </div>
+            )}
 
             {mensagemWhatsappModalAberto && (
               <div className="modal-backdrop">

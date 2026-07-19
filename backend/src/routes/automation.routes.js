@@ -34,6 +34,37 @@ router.post(
   controller.clearMachineQueue
 );
 
+router.get(
+  "/tasks/attendance-notifications/batch-preview",
+  autorizar("pedagoga"),
+  controller.previewAttendanceBatch
+);
+
+router.post(
+  "/tasks/attendance-notifications/batch",
+  autorizar("pedagoga"),
+  auditarMutacao({
+    acao: "AUTOMACAO_FALTAS_LOTE_CRIADO",
+    entidade: "automacao_lote",
+    entidadeId: ({ payload }) => payload?.summary?.requestId,
+    descricao: ({ payload }) => (
+      `Processou ${Number(payload?.summary?.totalEligibleClasses || 0)} turma(s) para notificacao em lote.`
+    ),
+    descricaoFalha: "A tentativa de notificar todas as turmas nao foi concluida.",
+    detalhes: ({ req, payload }) => ({
+      maquina: payload?.summary?.machineNumber || req.body.machineId,
+      turmas_analisadas: payload?.summary?.totalClassesAnalyzed ?? null,
+      turmas_elegiveis: payload?.summary?.totalEligibleClasses ?? null,
+      tarefas_criadas: payload?.summary?.totalTasksAddedToQueue ?? null,
+      duplicatas_bloqueadas: Number(payload?.summary?.totalAlreadyNotified || 0)
+        + Number(payload?.summary?.totalAlreadyPending || 0)
+        + Number(payload?.summary?.totalAlreadyProcessing || 0),
+      falhas: payload?.summary?.totalErrors ?? null,
+    }),
+  }),
+  controller.createAttendanceBatch
+);
+
 router.post(
   "/tasks/attendance-notifications",
   autorizar("pedagoga", "administracao"),

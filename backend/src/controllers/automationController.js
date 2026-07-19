@@ -28,6 +28,37 @@ async function createAttendanceTask(req, res, next) {
   }
 }
 
+async function previewAttendanceBatch(req, res, next) {
+  try {
+    const preview = await taskService.previewAttendanceBatch({
+      machineId: req.query?.machineId,
+      referenceDate: req.query?.referenceDate,
+      user: req.usuario,
+    });
+    return res.json({ preview });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function createAttendanceBatch(req, res, next) {
+  try {
+    const summary = await taskService.createAttendanceBatch({
+      requestId: req.body?.requestId,
+      machineId: req.body?.machineId,
+      referenceDate: req.body?.referenceDate,
+      user: req.usuario,
+    });
+    const added = Number(summary.totalTasksAddedToQueue || 0);
+    const message = added > 0
+      ? `${added} tarefa(s) adicionada(s) \u00e0 fila da M\u00e1quina ${summary.machineNumber}.`
+      : "Nenhuma nova tarefa entrou na fila; as duplicidades foram preservadas.";
+    return res.status(added > 0 ? 201 : 200).json({ message, summary });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function createGroupTask(req, res, next) {
   try {
     const result = await taskService.createGroupTask({
@@ -163,4 +194,6 @@ module.exports = {
   listQueues,
   listTasks,
   updateMessageTemplate,
+  createAttendanceBatch,
+  previewAttendanceBatch,
 };
