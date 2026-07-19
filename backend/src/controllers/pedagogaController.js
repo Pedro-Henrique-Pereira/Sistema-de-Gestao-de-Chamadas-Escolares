@@ -9,14 +9,11 @@ const atrasoService = require("../services/atrasoService");
 const dashboardService = require("../services/dashboardService");
 const { registrarAuditoria } = require("../services/chamadaAuditoriaService");
 const { contarTotaisFrequencia, condicoesFrequenciaSql } = require("../services/frequenciaMetricasService");
-const { serializarStatusAutomacao } = require("../utils/publicDtos");
 
 const FREQUENCIA_SQL = condicoesFrequenciaSql("f");
 
 const MATERIA_PEDAGOGICA = "Chamada Pedagógica";
 const MOTIVO_PADRAO_JUSTIFICATIVA = "Justificado em triagem pedagógica";
-const MENSAGEM_WHATSAPP_PADRAO = "Prezado(a) {nome_responsavel}, informamos que o(a) estudante {nome_aluno} não compareceu à aula na data de hoje, {data}, e não identificamos uma justificativa para a sua ausência. Solicitamos, gentilmente, que entrem em contato conosco para informar o motivo do não comparecimento. Agradecemos a cooperação.";
-const TAGS_MENSAGEM_WHATSAPP = ["{nome_responsavel}", "{nome_aluno}", "{data}"];
 
 function auditarBloqueioHorario(error, req) {
   if (![fluxoService.MENSAGENS.HORARIO_ENCERRADO, fluxoService.MENSAGENS.ATRASO_FORA_DO_HORARIO].includes(error?.message)) return;
@@ -1005,50 +1002,9 @@ async function atualizarResponsavel(req, res, next) {
 
 
 
-function validarTextoMensagemWhatsApp(texto) {
-  const textoNormalizado = String(texto || "").trim();
-
-  if (!textoNormalizado) {
-    const erro = new Error("A mensagem personalizada não pode ficar vazia.");
-    erro.status = 400;
-    throw erro;
-  }
-
-  if (textoNormalizado.length > 1000) {
-    const erro = new Error("A mensagem personalizada deve ter no máximo 1000 caracteres.");
-    erro.status = 400;
-    throw erro;
-  }
-
-  const tagsEncontradas = TAGS_MENSAGEM_WHATSAPP.filter((tag) => textoNormalizado.includes(tag));
-  if (tagsEncontradas.length === 0) {
-    const erro = new Error("Use pelo menos uma tag dinâmica: {nome_responsavel}, {nome_aluno} ou {data}.");
-    erro.status = 400;
-    throw erro;
-  }
-
-  return textoNormalizado;
-}
-
 function obterGrupoMaquinasPorTipoUsuario(tipo) {
-  if (tipo === "pedagoga") return [1, 2];
-  if (tipo === "administracao") return [3, 4, 5];
+  if (tipo === "pedagoga" || tipo === "administracao") return [1, 2];
   return [];
-}
-
-async function buscarDadosUsuarioSolicitante(connection, usuario) {
-  const [rows] = await connection.execute(
-    "SELECT id, nome, email, tipo, maquina_padrao_chamadas FROM usuarios WHERE id = ? AND ativo = TRUE LIMIT 1",
-    [usuario.id]
-  );
-
-  if (!rows.length) {
-    const erro = new Error("Usuário solicitante não encontrado ou inativo.");
-    erro.status = 401;
-    throw erro;
-  }
-
-  return rows[0];
 }
 
 function validarMaquinaPorTipoUsuario(tipo, valor, obrigatoria = true) {
@@ -1070,18 +1026,6 @@ function validarMaquinaPorTipoUsuario(tipo, valor, obrigatoria = true) {
   throw erro;
 }
 
-function resolverMaquinaDestinoSemBalanceamento(usuario, valorInformado) {
-  const valorEfetivo = valorInformado ?? usuario.maquina_padrao_chamadas;
-
-  if (valorEfetivo === null || valorEfetivo === undefined || valorEfetivo === "") {
-    const maquinasPermitidas = obterGrupoMaquinasPorTipoUsuario(usuario.tipo);
-    const erro = new Error(`Selecione manualmente a máquina de destino antes de iniciar a automação. Máquinas permitidas: ${maquinasPermitidas.map((m) => `Máquina ${m}`).join(", ")}.`);
-    erro.status = 400;
-    throw erro;
-  }
-
-  return validarMaquinaPorTipoUsuario(usuario.tipo, valorEfetivo);
-}
 
 async function obterPreferencias(req, res, next) {
   try {
@@ -1132,177 +1076,6 @@ async function salvarMaquinaPadraoChamadas(req, res, next) {
   }
 }
 
-async function criarSolicitacaoFilaFaltas(connection, usuario, maquinaDestino, origem, payload = {}) {
-  const [[configMensagem]] = await connection.execute(
-    "SELECT texto FROM config_mensagem_whatsapp WHERE id = 1 LIMIT 1"
-  );
-  const mensagem = configMensagem?.texto || MENSAGEM_WHATSAPP_PADRAO;
-
-  const [result] = await connection.execute(
-    `
-    INSERT INTO fila_automacao (
-      usuario_solicitante_id,
-      usuario_solicitante_nome,
-      maquina_destino,
-      tipo_automacao,
-      mensagem,
-      payload,
-      status,
-      data_solicitacao
-    )
-    VALUES (?, ?, ?, 'faltas', ?, ?, 'pendente', ?)
-    `,
-    [
-      usuario.id,
-      usuario.nome || usuario.email || `usuario-${usuario.id}`,
-      maquinaDestino,
-      mensagem,
-      JSON.stringify({ origem, ...payload }),
-      dataHoraBrasiliaMySQL(),
-    ]
-  );
-
-  return {
-    id: result.insertId,
-    status: "pendente",
-    maquina_destino: maquinaDestino,
-    usuario_solicitante_id: usuario.id,
-    usuario_solicitante_nome: usuario.nome,
-  };
-}
-
-async function solicitarAutomacaoWhatsApp(req, res, next) {
-  let connection;
-  let transacaoIniciada = false;
-
-  try {
-    connection = await db.getConnection();
-    if (!req.usuario?.id || !req.usuario?.tipo) {
-      const erro = new Error("Usuário não autenticado.");
-      erro.status = 401;
-      throw erro;
-    }
-
-    await connection.beginTransaction();
-    transacaoIniciada = true;
-
-    const usuario = await buscarDadosUsuarioSolicitante(connection, req.usuario);
-    const maquinasPermitidas = obterGrupoMaquinasPorTipoUsuario(usuario.tipo);
-
-    if (!maquinasPermitidas.length) {
-      const erro = new Error("Seu perfil não tem permissão para executar a automação do WhatsApp.");
-      erro.status = 403;
-      throw erro;
-    }
-
-    const configFluxo = await garantirConfiguracao(connection);
-    const [[confirmadasHoje]] = await connection.execute(
-      "SELECT COUNT(*) AS total FROM registros_chamadas_confirmadas WHERE data_chamada = ?",
-      [dataBrasiliaISO()]
-    );
-    fluxoService.assertPermission(
-      fluxoService.canStartAutomation(configFluxo, Number(confirmadasHoje.total || 0) > 0)
-    );
-
-    const maquinaDestino = resolverMaquinaDestinoSemBalanceamento(
-      usuario,
-      req.body.maquinaDestino || req.body.maquina_destino
-    );
-
-    const automacaoCriada = await criarSolicitacaoFilaFaltas(connection, usuario, maquinaDestino, "botao_executar_automacao", {
-      data: hojeLocalISO(),
-    });
-
-    await connection.commit();
-    transacaoIniciada = false;
-
-    return res.status(201).json({
-      mensagem: `Solicitação de automação registrada para a máquina ${maquinaDestino}.`,
-      automacao: serializarStatusAutomacao(automacaoCriada),
-    });
-  } catch (error) {
-    if (transacaoIniciada && connection) {
-      await connection.rollback();
-    }
-    return next(error);
-  } finally {
-    if (connection) connection.release();
-  }
-}
-
-async function consultarStatusAutomacaoWhatsApp(req, res, next) {
-  try {
-    const id = Number(req.params.id);
-
-    if (!Number.isInteger(id) || id <= 0) {
-      return res.status(400).json({ erro: "ID da automação inválido." });
-    }
-
-    const [rows] = await db.execute(
-      `
-      SELECT
-        id,
-        status,
-        erro
-      FROM fila_automacao
-      WHERE id = ?
-        AND (usuario_solicitante_id = ? OR ? = 'administracao')
-      LIMIT 1
-      `,
-      [id, req.usuario.id, req.usuario.tipo]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ erro: "Solicitação de automação não encontrada." });
-    }
-
-    return res.json({ automacao: serializarStatusAutomacao(rows[0]) });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-async function obterMensagemWhatsApp(req, res, next) {
-  try {
-    const [rows] = await db.execute(
-      "SELECT texto, atualizado_em FROM config_mensagem_whatsapp WHERE id = 1 LIMIT 1"
-    );
-
-    return res.json({
-      texto: rows[0]?.texto || MENSAGEM_WHATSAPP_PADRAO,
-      padrao: !rows[0],
-      tagsPermitidas: TAGS_MENSAGEM_WHATSAPP,
-      atualizado_em: rows[0]?.atualizado_em || null,
-    });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-async function salvarMensagemWhatsApp(req, res, next) {
-  try {
-    const texto = validarTextoMensagemWhatsApp(req.body.texto);
-
-    await db.execute(
-      `
-      INSERT INTO config_mensagem_whatsapp (id, texto)
-      VALUES (1, ?)
-      ON DUPLICATE KEY UPDATE texto = VALUES(texto), atualizado_em = CURRENT_TIMESTAMP
-      `,
-      [texto]
-    );
-
-    return res.json({
-      mensagem: "Mensagem personalizada salva com sucesso.",
-      texto,
-      padrao: false,
-      tagsPermitidas: TAGS_MENSAGEM_WHATSAPP,
-    });
-  } catch (error) {
-    return next(error);
-  }
-}
-
 async function dadosRelatorios(req, res, next) {
   try {
     const [[turmas], [alunos]] = await Promise.all([
@@ -1344,8 +1117,4 @@ module.exports = {
   dadosRelatorios,
   obterPreferencias,
   salvarMaquinaPadraoChamadas,
-  solicitarAutomacaoWhatsApp,
-  consultarStatusAutomacaoWhatsApp,
-  obterMensagemWhatsApp,
-  salvarMensagemWhatsApp,
 };

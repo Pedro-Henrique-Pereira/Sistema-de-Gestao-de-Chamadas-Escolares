@@ -28,10 +28,6 @@ async function executarLimpezaAutomatica() {
       [mesesRetencao]
     );
 
-    const [resultadoControleEnvios] = await connection.execute(
-      "DELETE FROM controle_envios_diarios WHERE data_envio < CURDATE()"
-    );
-
     const [resultadoChamadas] = await connection.execute(
       "DELETE FROM chamadas_diarias WHERE status = 'cancelada' AND data_chamada < DATE_SUB(CURDATE(), INTERVAL 30 DAY)"
     );
@@ -41,7 +37,6 @@ async function executarLimpezaAutomatica() {
 
     const resumo = {
       chamadasDiariasRemovidas: resultadoChamadas.affectedRows || 0,
-      controleEnviosRemovidos: resultadoControleEnvios.affectedRows || 0,
       justificativasRemovidas: resultadoJustificativas.affectedRows || 0,
       tokensRecuperacaoRemovidos,
       mesesRetencaoJustificativas: mesesRetencao,

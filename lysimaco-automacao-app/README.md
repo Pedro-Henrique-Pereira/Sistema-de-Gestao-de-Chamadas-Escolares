@@ -1,123 +1,88 @@
 # Lysímaco Automação App
 
-Aplicativo desktop independente que processa a fila de mensagens do Sistema de Chamadas e opera o WhatsApp Web por Selenium.
+Aplicativo desktop independente que consulta a fila do Sistema de Chamadas e
+opera o WhatsApp Web por Selenium.
 
-## Arquitetura
+## Separação das aplicações
 
 ```text
-Sistema web -> MySQL
-      |
-      v
-API /api/automation-worker (Bearer por máquina)
-      |
-      v
-Lysímaco Automação App -> WhatsApp Web
+Sistema web -> backend/API -> fila persistente
+                                ^
+                                |
+Aplicativo desktop -> heartbeat, claim e resultados -> WhatsApp Web
 ```
 
-O aplicativo não acessa o MySQL, não importa módulos do backend e não utiliza login pessoal de administrador, pedagoga ou professor. Toda integração ocorre pela API autenticada.
+O aplicativo não acessa MySQL, não importa código do backend e não utiliza
+login de pedagoga, administrador ou professor. O navegador do usuário não
+precisa permanecer aberto depois que o backend aceita uma tarefa.
 
-## Fluxo de envio
+## Configuração
 
-1. Um usuário autorizado solicita a automação no sistema web.
-2. O backend registra a tarefa em `fila_automacao`.
-3. O aplicativo reivindica um lote em `POST /api/automation-worker/tasks/claim`.
-4. O backend considera apenas faltas confirmadas em `registros_frequencia_alunos`.
-5. Cada destinatário recebe uma chave idempotente e um estado persistente em `automacao_entregas`.
-6. O aplicativo envia a mensagem pelo WhatsApp Web.
-7. Um checkpoint técnico é gravado localmente antes da confirmação remota.
-8. O resultado é confirmado em `POST /api/automation-worker/deliveries/:id/result`.
-
-Chamadas temporárias não são consultadas. Antes da reserva, o backend revalida o estado mais recente da falta; uma falta editada para presença, atraso ou outro estado não elegível é ignorada.
-
-## Estados
-
-- `pendente`: ainda não reservada.
-- `processando`: reservada por um worker durante uma janela limitada.
-- `enviado`: envio confirmado.
-- `erro`: tentativa falhou e pode ser retomada até o limite.
-- `cancelado`: cancelada antes do processamento.
-- `ignorado`: deixou de ser elegível ou não possui destino válido.
-
-O backend controla o limite de tentativas. O padrão é 3 e a faixa aceita é de 1 a 5. Locks expirados voltam de forma controlada; não existe loop de retentativa sem limite.
-
-## Configuração do backend
-
-No `backend/config.env`, repita o mesmo token nas máquinas que poderão ser selecionadas por este aplicativo:
-
-```env
-AUTOMATION_SERVICE_TOKENS={"1":"token-aleatorio-com-ao-menos-32-caracteres","2":"token-aleatorio-com-ao-menos-32-caracteres","3":"outro-token-restrito-com-ao-menos-32-caracteres"}
-AUTOMATION_DELIVERY_MAX_ATTEMPTS=3
-AUTOMATION_DELIVERY_LEASE_SECONDS=300
-AUTOMATION_DELIVERY_BATCH_SIZE=25
-```
-
-Gere tokens aleatórios e nunca os versione. Depois aplique a migração:
-
-```powershell
-cd backend
-npm run migrate:automation-api
-```
-
-## Configuração do aplicativo
-
-Copie `.env.example` para `.env` e preencha:
+Copie `.env.example` para `.env` e defina:
 
 ```env
 API_BASE_URL=https://api.seu-dominio.com
-AUTOMATION_API_TOKEN=token-das-maquinas-autorizadas
-AUTOMATION_WORKER_ID=automacao-escola
+AUTOMATION_MACHINE_TOKENS={"1":"token-unico-maquina-1-com-32-caracteres"}
+AUTOMATION_APP_VERSION=2.0.0
+AUTOMATION_WORKER_ID=computador-escola
 NUMERO_MAQUINA=1
 ```
 
-`NUMERO_MAQUINA` é apenas o valor inicial. Depois, o número pode ser alterado e salvo pela interface. O backend aceita a troca somente quando `AUTOMATION_API_TOKEN` estiver repetido na chave da máquina selecionada em `AUTOMATION_SERVICE_TOKENS`.
+Cada máquina possui um token exclusivo, igual ao par correspondente de
+`AUTOMATION_MACHINE_TOKENS` no backend. Uma instalação pode guardar mais de um
+par para permitir a troca fácil pela interface, mas os tokens continuam
+distintos e a credencial selecionada é sempre a da máquina escolhida.
 
-URLs remotas exigem HTTPS. HTTP pode ser usado por padrão apenas em `localhost`; para uma rede local controlada, a liberação precisa ser explícita com `ALLOW_INSECURE_HTTP=true`.
+URLs remotas devem usar HTTPS. HTTP é aceito automaticamente apenas em
+`localhost`; em rede local controlada, a liberação precisa ser explícita com
+`ALLOW_INSECURE_HTTP=true`.
 
-## Execução separada
+## Execução
 
-Backend:
+Backend, em seu servidor:
 
 ```powershell
 cd backend
 npm install
+npm run migrate:automation-api
 npm start
 ```
 
-Aplicativo:
+Aplicativo, na máquina de automação:
 
 ```powershell
 cd lysimaco-automacao-app
-python -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe main.py
 ```
 
-Os dois projetos podem rodar em computadores e ciclos de atualização diferentes. O aplicativo tolera indisponibilidade temporária da API usando timeout, polling limitado e checkpoints persistentes.
+Python 3.11 ou 3.12 é recomendado. O número inicial vem de `NUMERO_MAQUINA` e
+pode ser alterado e salvo no painel antes de ligar a automação.
 
-## Logs e privacidade
+## Funcionamento
 
-Os logs ficam em `logs/` com rotação. Eles registram tarefa, entrega, tentativa e resultado. Telefones são mascarados; nomes, mensagens, tokens, cookies e dados pessoais completos não são gravados.
+1. autentica a identidade da máquina;
+2. envia heartbeat e versão;
+3. captura somente a próxima tarefa FIFO da máquina;
+4. processa cada responsável ou grupo separadamente;
+5. grava um checkpoint técnico local antes de confirmar o resultado;
+6. envia progresso e resultado ao backend;
+7. continua a fila sem depender do navegador do usuário.
 
-O arquivo `runtime/delivery-receipts.json` guarda somente IDs técnicos de envios já executados que ainda aguardam confirmação da API. Ele impede que uma reinicialização repita um envio já concluído localmente.
+O arquivo `runtime/delivery-receipts.json` guarda apenas IDs técnicos e o
+identificador local do checkpoint. Não armazena mensagem, telefone ou token.
+Isso evita repetir automaticamente um envio já feito quando a confirmação da
+API falha.
 
-## Testes
+## Logs e testes
 
-Backend:
+Os logs rotativos em `logs/` não registram mensagem, token nem telefone
+completo.
 
 ```powershell
-cd backend
-npm test
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Aplicativo:
-
-```powershell
-cd lysimaco-automacao-app
-python -m unittest discover -s tests -v
-```
-
-Para validar sem enviar mensagens reais, use `DRY_RUN=true`. As entregas serão marcadas como ignoradas, sem registrar o conteúdo no log.
-
-## Limitação operacional
-
-O WhatsApp Web não fornece uma transação atômica entre o clique de envio e a confirmação na API. O journal local reduz essa janela: assim que o Selenium retorna sucesso, o ID técnico é persistido antes da chamada à API. A perda simultânea do disco local e da confirmação remota ainda exige conferência manual.
+Use `DRY_RUN=true` somente em validação controlada; nesse modo nenhuma mensagem
+real é enviada.

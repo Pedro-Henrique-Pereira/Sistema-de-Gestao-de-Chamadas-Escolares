@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import AutomacaoFeedbackModal from '../components/AutomacaoFeedbackModal';
+import {
+  criarRequestId,
+  criarTarefaGrupos,
+  listarFilasAutomacao,
+  listarMaquinasAutomacao,
+  listarTarefasAutomacao,
+} from '../services/automacaoService';
 import {
   atualizarGrupoWhatsapp,
   criarGrupoWhatsapp,
-  enviarMensagemGrupos,
-  limparTarefasAntigasAutomacao,
   listarGruposMensagens,
   obterPreferenciasMensagens,
   removerGrupoWhatsapp,
@@ -13,6 +18,16 @@ import {
 
 const MAQUINAS = [3, 4, 5];
 const FORM_INICIAL = { id: null, nomeGrupo: '' };
+
+function versaoIncompativel(atual, minima) {
+  if (!atual || !minima) return false;
+  const parse = (value) => String(value).split('.').slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
+  const left = parse(atual);
+  const right = parse(minima);
+  return left.some((value, index) => value !== right[index]
+    && left.slice(0, index).every((item, previous) => item === right[previous])
+    && value < right[index]);
+}
 
 export default function MensagensAdmin() {
   const [grupos, setGrupos] = useState([]);
@@ -26,8 +41,11 @@ export default function MensagensAdmin() {
   const [enviando, setEnviando] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [erro, setErro] = useState('');
-  const [limpando, setLimpando] = useState(false);
+  const [maquinas, setMaquinas] = useState([]);
+  const [filas, setFilas] = useState([]);
+  const [tarefasRecentes, setTarefasRecentes] = useState([]);
   const [automacaoModal, setAutomacaoModal] = useState({ aberto: false, ids: [] });
+  const requestIdPendente = useRef(null);
 
   const totalDestinatarios = useMemo(() => {
     if (modoDestinatarios === 'todos') return grupos.length;
@@ -39,12 +57,18 @@ export default function MensagensAdmin() {
     setErro('');
 
     try {
-      const [dadosGrupos, preferencias] = await Promise.all([
+      const [dadosGrupos, preferencias, dadosMaquinas, dadosFilas, dadosTarefas] = await Promise.all([
         listarGruposMensagens(),
         obterPreferenciasMensagens(),
+        listarMaquinasAutomacao(),
+        listarFilasAutomacao(),
+        listarTarefasAutomacao({ type: 'group_message', limit: 10 }),
       ]);
 
       setGrupos(dadosGrupos.grupos || []);
+      setMaquinas((dadosMaquinas.machines || []).filter((machine) => MAQUINAS.includes(machine.machineNumber)));
+      setFilas((dadosFilas.queues || []).filter((queue) => MAQUINAS.includes(queue.machineNumber)));
+      setTarefasRecentes(dadosTarefas.tasks || []);
       const maquinaSalva = Number(preferencias.maquinaPadraoMensagens || 3);
       setMaquinaDestino(MAQUINAS.includes(maquinaSalva) ? maquinaSalva : 3);
     } catch (error) {
@@ -148,45 +172,32 @@ export default function MensagensAdmin() {
         throw new Error('Selecione uma máquina válida para administrador: Máquina 3, 4 ou 5.');
       }
 
-      const resposta = await enviarMensagemGrupos({
-        modoDestinatarios,
-        grupos: modoDestinatarios === 'todos' ? [] : gruposSelecionados,
-        mensagem,
-        maquinaDestino,
+      requestIdPendente.current ||= criarRequestId('groups');
+      const resposta = await criarTarefaGrupos({
+        requestId: requestIdPendente.current,
+        machineId: `machine-${maquinaDestino}`,
+        groups: modoDestinatarios === 'todos' ? [] : gruposSelecionados,
+        allGroups: modoDestinatarios === 'todos',
+        message: mensagem,
       });
+      const idFila = Number(resposta.task?.taskId);
 
-      const idsFila = (resposta.ids || resposta.solicitacoes || [])
-        .map((item) => Number(typeof item === 'object' ? item.id : item))
-        .filter((id) => Number.isInteger(id) && id > 0);
-
-      setFeedback(resposta.mensagem || 'Mensagem adicionada à fila com sucesso.');
+      setFeedback(resposta.message || 'Mensagem adicionada à fila com sucesso.');
       setMensagem('');
       if (modoDestinatarios !== 'todos') setGruposSelecionados([]);
+      requestIdPendente.current = null;
 
-      if (idsFila.length > 0) {
-        setAutomacaoModal({ aberto: true, ids: idsFila });
+      if (Number.isInteger(idFila) && idFila > 0) {
+        setAutomacaoModal({ aberto: true, ids: [idFila] });
+        setTarefasRecentes((current) => [
+          resposta.task,
+          ...current.filter((task) => task.taskId !== idFila),
+        ].slice(0, 10));
       }
     } catch (error) {
       setErro(error.message || 'Erro ao enviar mensagem para a fila.');
     } finally {
       setEnviando(false);
-    }
-  }
-
-  async function handleLimparTarefasAntigas() {
-    setLimpando(true);
-    setFeedback('');
-    setErro('');
-
-    try {
-      const resposta = await limparTarefasAntigasAutomacao();
-      setFeedback(
-        `${resposta.mensagem} Removidas: ${resposta.removidas}. Expiradas: ${resposta.expiradas}. Locks liberados: ${resposta.locksLiberados}.`
-      );
-    } catch (error) {
-      setErro(error.message || 'Erro ao limpar tarefas antigas.');
-    } finally {
-      setLimpando(false);
     }
   }
 
@@ -197,6 +208,7 @@ export default function MensagensAdmin() {
         solicitacoes={automacaoModal.ids}
         titulo="Enviando mensagem para grupos"
         timeoutAlertaSegundos={180}
+        permitirCancelamento
         onClose={() => setAutomacaoModal({ aberto: false, ids: [] })}
         onCancelado={() => {
           setFeedback('Envio cancelado antes do robô local iniciar.');
@@ -249,6 +261,25 @@ export default function MensagensAdmin() {
           )}
         </div>
       </form>
+
+      <div className="admin-panel mensagens-form">
+        <div className="admin-title-box mensagens-subtitle-box">
+          <h3>Filas por máquina</h3>
+          <p>As máquinas processam suas filas de forma independente.</p>
+        </div>
+        <div className="mensagens-checkbox-grid">
+          {filas.map((queue) => (
+            <div key={queue.machineId} className="mensagens-checkbox-item mensagens-grupo-card">
+              <strong>Máquina {queue.machineNumber} · {queue.state}</strong>
+              <small>{queue.queuedTasks} na fila · {queue.processingTasks} em processamento</small>
+              <small>Último heartbeat: {queue.lastHeartbeatAt ? new Date(queue.lastHeartbeatAt).toLocaleString('pt-BR') : 'não recebido'}</small>
+              {versaoIncompativel(queue.appVersion, queue.minimumVersion) && (
+                <small>Atualização necessária: versão mínima {queue.minimumVersion}.</small>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
 
       <div className="admin-panel mensagens-form">
         <div className="admin-title-box mensagens-subtitle-box">
@@ -342,6 +373,12 @@ export default function MensagensAdmin() {
           <span>Resumo do envio</span>
           <strong>{totalDestinatarios} grupo(s) do WhatsApp entrarão na fila da Máquina {maquinaDestino}</strong>
           <small>A preferência de máquina fica salva por conta de administrador.</small>
+          {maquinas.find((machine) => machine.machineNumber === Number(maquinaDestino)) && (
+            <small>
+              Estado: {maquinas.find((machine) => machine.machineNumber === Number(maquinaDestino)).state}
+              {' · '}Fila: {maquinas.find((machine) => machine.machineNumber === Number(maquinaDestino)).queueDepth}
+            </small>
+          )}
         </div>
 
         <div className="mensagens-actions">
@@ -353,16 +390,29 @@ export default function MensagensAdmin() {
             {enviando ? 'Adicionando à fila...' : 'Enviar para fila'}
           </button>
 
-          <button
-            className="admin-secondary-btn"
-            type="button"
-            disabled={limpando}
-            onClick={handleLimparTarefasAntigas}
-          >
-            {limpando ? 'Limpando...' : 'Limpar tarefas antigas'}
-          </button>
         </div>
       </form>
+
+      <div className="admin-panel mensagens-form">
+        <div className="admin-title-box mensagens-subtitle-box">
+          <h3>Tarefas recentes</h3>
+          <p>O processamento continua mesmo após fechar esta página.</p>
+        </div>
+        <div className="mensagens-checkbox-grid">
+          {tarefasRecentes.length === 0 && <p>Nenhuma tarefa recente.</p>}
+          {tarefasRecentes.map((task) => (
+            <button
+              key={task.taskId}
+              className="mensagens-checkbox-item mensagens-grupo-card"
+              type="button"
+              onClick={() => setAutomacaoModal({ aberto: true, ids: [task.taskId] })}
+            >
+              <strong>Tarefa #{task.taskId} · Máquina {task.machineNumber}</strong>
+              <small>{task.status} · {task.processed}/{task.total} processados · {task.failureCount} falha(s)</small>
+            </button>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }

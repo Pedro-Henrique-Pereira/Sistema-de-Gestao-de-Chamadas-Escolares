@@ -5,18 +5,28 @@ const path = require("node:path");
 const express = require("express");
 
 const {
+  autenticarAutomationWorker,
   carregarTokensServico,
   tokensIguais,
 } = require("../middlewares/automationWorkerAuth");
 const {
-  normalizarTelefone,
-  renderizarMensagem,
+  ATTENDANCE_MACHINES,
+  GROUP_MACHINES,
+  assertMachineAllowed,
+  normalizePhone,
+  publicTaskStatus,
+  renderAttendanceMessage,
+} = require("../services/automationDomain");
+const {
   validarWorkerId,
 } = require("../services/automationWorkerService");
+const {
+  ensurePersonalizedTemplate,
+} = require("../services/automationTaskService");
 
 const ROOT = path.resolve(__dirname, "../../..");
 
-test("tokens da automação mapeiam máquinas autorizadas e são comparados com segurança", () => {
+test("cada máquina usa uma credencial exclusiva comparada em tempo constante", () => {
   const tokens = carregarTokensServico(JSON.stringify({
     1: "a".repeat(32),
     3: "b".repeat(40),
@@ -26,52 +36,103 @@ test("tokens da automação mapeiam máquinas autorizadas e são comparados com 
   assert.equal(tokensIguais("a".repeat(32), tokens.get(1)), true);
   assert.equal(tokensIguais("x".repeat(32), tokens.get(1)), false);
   assert.throws(
+    () => carregarTokensServico(JSON.stringify({ 1: "a".repeat(32), 2: "a".repeat(32) })),
+    /credencial exclusiva/
+  );
+  assert.throws(
     () => carregarTokensServico('{"1":"curto"}'),
     /pelo menos 32 caracteres/
   );
 });
 
-test("worker id e dados mínimos da entrega são validados sem expor credenciais", () => {
+test("worker, telefone e mensagem personalizada são validados", () => {
   assert.equal(validarWorkerId("maquina-1:escola"), "maquina-1:escola");
   assert.throws(() => validarWorkerId("../invalido"), /inválido/);
-  assert.equal(normalizarTelefone("(44) 99913-5827", "55"), "5544999135827");
-  assert.equal(normalizarTelefone("123", "55"), "");
+  assert.equal(normalizePhone("(44) 99913-5827", "55"), "5544999135827");
+  assert.equal(normalizePhone("123", "55"), "");
   assert.equal(
-    renderizarMensagem(
+    renderAttendanceMessage(
       "Olá {nome_responsavel}; {nome_aluno}; {data}",
-      { nomeResponsavel: "Ana", nomeAluno: "Bia", data: "2026-07-19" }
+      { guardianName: "Ana", studentName: "Bia", absenceDate: "2026-07-19" }
     ),
     "Olá Ana; Bia; 19/07/2026"
   );
+  assert.match(ensurePersonalizedTemplate("Entre em contato com a escola."), /\{nome_aluno\}/);
+  assert.match(ensurePersonalizedTemplate("Entre em contato com a escola."), /\{nome_responsavel\}/);
 });
 
-test("migração cria estados completos e chave idempotente por ocorrência", () => {
-  const migration = fs.readFileSync(
+test("permissões de máquina e estados públicos seguem o contrato V2", () => {
+  assert.equal(assertMachineAllowed(1, ATTENDANCE_MACHINES), 1);
+  assert.equal(assertMachineAllowed(3, GROUP_MACHINES), 3);
+  assert.throws(() => assertMachineAllowed(3, ATTENDANCE_MACHINES), /não é permitida/);
+  assert.equal(publicTaskStatus({ status: "pendente" }, "offline"), "waiting_for_machine");
+  assert.equal(publicTaskStatus({ status: "pendente" }, "online_busy"), "queued");
+  assert.equal(publicTaskStatus({ status: "executando" }), "processing");
+  assert.equal(publicTaskStatus({ status: "concluido" }), "completed_successfully");
+  assert.equal(publicTaskStatus({ status: "concluido_parcial" }), "completed_partially");
+  assert.equal(publicTaskStatus({ status: "erro" }), "completed_with_failures");
+  assert.equal(publicTaskStatus({ status: "cancelado" }), "cancelled");
+});
+
+test("migration V2 persiste máquinas, eventos, idempotência e estados finais", () => {
+  const baseMigration = fs.readFileSync(
     path.join(ROOT, "backend/src/database/migrations/2026-07-19_automacao_api.sql"),
     "utf8"
   );
-  assert.match(migration, /CREATE TABLE IF NOT EXISTS automacao_entregas/);
-  assert.match(migration, /UNIQUE KEY uk_automacao_entregas_idempotencia/);
-  for (const status of ["pendente", "processando", "enviado", "erro", "cancelado", "ignorado"]) {
-    assert.match(migration, new RegExp(`'${status}'`));
-  }
-  assert.match(migration, /tentativas <= 5/);
+  const v2Migration = fs.readFileSync(
+    path.join(ROOT, "backend/src/database/migrations/2026-07-20_automacao_tarefas_v2.sql"),
+    "utf8"
+  );
+  const runner = fs.readFileSync(
+    path.join(ROOT, "backend/src/database/migrations/aplicarAutomacaoApi.js"),
+    "utf8"
+  );
+  assert.match(baseMigration, /CREATE TABLE IF NOT EXISTS automacao_entregas/);
+  assert.match(baseMigration, /UNIQUE KEY uk_automacao_entregas_idempotencia/);
+  assert.match(v2Migration, /CREATE TABLE IF NOT EXISTS automacao_maquinas/);
+  assert.match(v2Migration, /CREATE TABLE IF NOT EXISTS automacao_eventos/);
+  assert.match(v2Migration, /online_available/);
+  assert.match(v2Migration, /online_busy/);
+  assert.match(runner, /uk_fila_automacao_request_id/);
+  assert.match(runner, /uk_fila_automacao_idempotencia/);
+  assert.match(runner, /idx_fila_maquina_fifo/);
+  assert.match(runner, /concluido_parcial/);
+  assert.match(runner, /falha_comunicacao/);
 });
 
-test("faltas temporárias e editadas não são enviadas pela integração", () => {
+test("tarefa de faltas nasce da chamada confirmada e tarefa de grupos deduplica destinos", () => {
+  const service = fs.readFileSync(
+    path.join(ROOT, "backend/src/services/automationTaskService.js"),
+    "utf8"
+  );
+  assert.match(service, /FROM registros_chamadas_confirmadas/);
+  assert.match(service, /FROM registros_frequencia_alunos/);
+  assert.match(service, /LOWER\(COALESCE\(f\.status, ''\)\) = 'ausente'/);
+  assert.match(service, /COALESCE\(f\.atrasado, FALSE\) = FALSE/);
+  assert.match(service, /attendance:\$\{attendanceId\}:absence-notification/);
+  assert.match(service, /Array\.from\(new Set/);
+  assert.match(service, /groups:\$\{requestId\}/);
+  assert.doesNotMatch(service, /FROM chamadas_diarias\s/);
+});
+
+test("fila usa lock por máquina, FIFO e checkpoints sem bloquear outras máquinas", () => {
   const service = fs.readFileSync(
     path.join(ROOT, "backend/src/services/automationWorkerService.js"),
     "utf8"
   );
-  assert.match(service, /FROM registros_frequencia_alunos rfa/);
-  assert.doesNotMatch(service, /FROM chamadas_diarias\s/);
-  assert.match(service, /LOWER\(COALESCE\(rfa\.status, ''\)\) = 'ausente'/);
-  assert.match(service, /COALESCE\(rfa\.atrasado, FALSE\) = FALSE/);
-  assert.match(service, /NOT EXISTS \(\s*SELECT 1\s*FROM registros_frequencia_alunos/s);
-  assert.match(service, /CONCAT\('falta:', \?, ':', rfa\.aluno_id\)/);
+  assert.match(service, /FROM automacao_maquinas/);
+  assert.match(service, /WHERE maquina_destino = \?/);
+  assert.match(service, /data_solicitacao ASC,\s*id ASC/);
+  assert.match(service, /FOR UPDATE SKIP LOCKED/);
+  assert.match(service, /tarefa_atual_id/);
+  assert.match(service, /lock_adquirido_em = NOW\(\)/);
+  assert.match(service, /existingBatchForOwner/);
+  assert.match(service, /status = 'processando'\s+AND lock_owner = \?/);
+  assert.match(service, /DELIVERY_RESULT/);
+  assert.match(service, /retentavel = TRUE/);
 });
 
-test("rota do worker usa Bearer próprio e permanece separada do CSRF por cookies", () => {
+test("rota técnica fica antes do CSRF e oferece heartbeat, claim e resultado", () => {
   const server = fs.readFileSync(path.join(ROOT, "backend/src/server.js"), "utf8");
   const workerMount = server.indexOf('app.use("/api/automation-worker", automationWorkerRoutes)');
   const csrfMount = server.indexOf("app.use(csrfProtection)");
@@ -84,89 +145,49 @@ test("rota do worker usa Bearer próprio e permanece separada do CSRF por cookie
   );
   assert.match(routes, /autenticarAutomationWorker/);
   assert.match(routes, /rateLimit/);
+  assert.match(routes, /\/heartbeat/);
   assert.match(routes, /\/tasks\/claim/);
   assert.match(routes, /\/deliveries\/:id\/result/);
 });
 
-test("endpoint técnico rejeita ausência/token incorreto e aceita a identidade da máquina", async () => {
-  const anterior = process.env.AUTOMATION_SERVICE_TOKENS;
-  const token = "token-tecnico-maquina-1-".padEnd(40, "x");
-  process.env.AUTOMATION_SERVICE_TOKENS = JSON.stringify({ 1: token });
+test("credencial de uma máquina não pode selecionar outra máquina", async () => {
+  const anterior = process.env.AUTOMATION_MACHINE_TOKENS;
+  const token1 = "token-tecnico-maquina-1-".padEnd(40, "x");
+  const token2 = "token-tecnico-maquina-2-".padEnd(40, "y");
+  process.env.AUTOMATION_MACHINE_TOKENS = JSON.stringify({ 1: token1, 2: token2 });
 
   const app = express();
-  app.use(express.json());
-  app.use("/api/automation-worker", require("../routes/automation-worker.routes"));
+  app.get("/worker", autenticarAutomationWorker, (req, res) => {
+    res.json(req.automationWorker);
+  });
   const server = await new Promise((resolve) => {
     const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
   });
   const { port } = server.address();
+  const url = `http://127.0.0.1:${port}/worker`;
 
   try {
-    const ausente = await fetch(`http://127.0.0.1:${port}/api/automation-worker/health`);
-    assert.equal(ausente.status, 401);
-
-    const incorreto = await fetch(`http://127.0.0.1:${port}/api/automation-worker/health`, {
-      headers: { Authorization: `Bearer ${"z".repeat(40)}` },
-    });
-    assert.equal(incorreto.status, 401);
-
-    const valido = await fetch(`http://127.0.0.1:${port}/api/automation-worker/health`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(valido.status, 200);
-    assert.deepEqual(await valido.json(), { status: "ok", maquina_id: 1 });
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-    if (anterior === undefined) delete process.env.AUTOMATION_SERVICE_TOKENS;
-    else process.env.AUTOMATION_SERVICE_TOKENS = anterior;
-  }
-});
-
-test("token compartilhado seleciona somente uma das máquinas autorizadas pelo cabeçalho", async () => {
-  const anterior = process.env.AUTOMATION_SERVICE_TOKENS;
-  const tokenCompartilhado = "token-compartilhado-interface-".padEnd(40, "x");
-  const tokenRestrito = "token-restrito-maquina-3-".padEnd(40, "y");
-  process.env.AUTOMATION_SERVICE_TOKENS = JSON.stringify({
-    1: tokenCompartilhado,
-    2: tokenCompartilhado,
-    3: tokenRestrito,
-  });
-
-  const app = express();
-  app.use(express.json());
-  app.use("/api/automation-worker", require("../routes/automation-worker.routes"));
-  const server = await new Promise((resolve) => {
-    const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
-  });
-  const { port } = server.address();
-  const url = `http://127.0.0.1:${port}/api/automation-worker/health`;
-
-  try {
-    const maquina2 = await fetch(url, {
+    assert.equal((await fetch(url)).status, 401);
+    const valid = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${tokenCompartilhado}`,
+        Authorization: `Bearer ${token2}`,
         "X-Automation-Machine": "2",
       },
     });
-    assert.equal(maquina2.status, 200);
-    assert.deepEqual(await maquina2.json(), { status: "ok", maquina_id: 2 });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(await valid.json(), { maquinaId: 2, identidade: "machine-2" });
 
-    const semSelecao = await fetch(url, {
-      headers: { Authorization: `Bearer ${tokenCompartilhado}` },
-    });
-    assert.equal(semSelecao.status, 400);
-
-    const naoAutorizada = await fetch(url, {
+    const forbidden = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${tokenRestrito}`,
+        Authorization: `Bearer ${token1}`,
         "X-Automation-Machine": "2",
       },
     });
-    assert.equal(naoAutorizada.status, 403);
+    assert.equal(forbidden.status, 403);
   } finally {
     await new Promise((resolve) => server.close(resolve));
-    if (anterior === undefined) delete process.env.AUTOMATION_SERVICE_TOKENS;
-    else process.env.AUTOMATION_SERVICE_TOKENS = anterior;
+    if (anterior === undefined) delete process.env.AUTOMATION_MACHINE_TOKENS;
+    else process.env.AUTOMATION_MACHINE_TOKENS = anterior;
   }
 });
 

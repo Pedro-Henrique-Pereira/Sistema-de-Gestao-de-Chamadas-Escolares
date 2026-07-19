@@ -1,274 +1,218 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { cancelarAutomacao, consultarStatusAutomacao } from '../services/automacaoService';
-import '../styles/AutomacaoFeedbackModal.css';
+import { useEffect, useMemo, useRef, useState } from "react";
+import { cancelarAutomacao, consultarStatusAutomacao } from "../services/automacaoService";
+import "../styles/AutomacaoFeedbackModal.css";
 
-const STATUS_EM_ANDAMENTO = new Set(['pendente', 'executando']);
-const STATUS_FINAIS_OK = new Set(['concluido']);
-const STATUS_FINAIS_PROBLEMA = new Set(['erro', 'expirado', 'cancelado']);
-const MENSAGEM_ERRO_AUTOMACAO = 'Falha no disparo. Verifique a máquina local ou o status do WhatsApp Web.';
+const ONGOING = new Set(["waiting_for_machine", "queued", "processing"]);
+const SUCCESS = new Set(["completed_successfully"]);
+const PROBLEM = new Set([
+  "completed_partially",
+  "completed_with_failures",
+  "communication_failure",
+  "cancelled",
+]);
 
-function normalizarIds(solicitacoes) {
-  if (!Array.isArray(solicitacoes)) return [];
-  return solicitacoes
-    .map((item) => Number(typeof item === 'object' ? item?.id : item))
+const STATUS_LABELS = {
+  waiting_for_machine: "Aguardando máquina",
+  queued: "Na fila",
+  processing: "Em processamento",
+  completed_successfully: "Concluída com sucesso",
+  completed_partially: "Concluída parcialmente",
+  completed_with_failures: "Concluída com falhas",
+  communication_failure: "Falha de comunicação",
+  cancelled: "Cancelada",
+};
+
+function normalizeIds(requests) {
+  if (!Array.isArray(requests)) return [];
+  return requests
+    .map((item) => Number(typeof item === "object" ? item?.taskId || item?.id : item))
     .filter((id) => Number.isInteger(id) && id > 0);
 }
 
-function formatarDuracao(totalSegundos) {
-  const segundos = Math.max(0, Number(totalSegundos || 0));
-  const minutos = Math.floor(segundos / 60);
-  const restoSegundos = segundos % 60;
-  if (minutos <= 0) return `${restoSegundos}s`;
-  return `${minutos}min ${String(restoSegundos).padStart(2, '0')}s`;
+function durationLabel(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds || 0));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes ? `${minutes}min ${String(rest).padStart(2, "0")}s` : `${rest}s`;
 }
 
-function resumirStatus(statusPorId) {
-  const automacoes = Object.values(statusPorId || {});
-  if (!automacoes.length) return { statusGeral: 'pendente', concluidas: 0, pendentes: 0, executando: 0, problemas: 0 };
-
-  const concluidas = automacoes.filter((item) => STATUS_FINAIS_OK.has(item.status)).length;
-  const pendentes = automacoes.filter((item) => item.status === 'pendente').length;
-  const executando = automacoes.filter((item) => item.status === 'executando').length;
-  const problemas = automacoes.filter((item) => STATUS_FINAIS_PROBLEMA.has(item.status)).length;
-
-  let statusGeral = 'pendente';
-  if (problemas > 0) statusGeral = 'erro';
-  else if (concluidas === automacoes.length) statusGeral = 'concluido';
-  else if (executando > 0) statusGeral = 'executando';
-
-  return { statusGeral, concluidas, pendentes, executando, problemas };
+function summarize(tasks) {
+  const values = Object.values(tasks || {});
+  const total = values.reduce((sum, task) => sum + Number(task.total || 0), 0);
+  const processed = values.reduce((sum, task) => sum + Number(task.processed || 0), 0);
+  const successes = values.reduce((sum, task) => sum + Number(task.successCount || 0), 0);
+  const failures = values.reduce((sum, task) => sum + Number(task.failureCount || 0), 0);
+  let status = "queued";
+  if (values.some((task) => task.status === "processing")) status = "processing";
+  else if (values.some((task) => task.status === "waiting_for_machine")) status = "waiting_for_machine";
+  else if (values.length && values.every((task) => SUCCESS.has(task.status))) status = "completed_successfully";
+  else if (values.some((task) => PROBLEM.has(task.status))) {
+    status = values.some((task) => task.status === "completed_partially")
+      ? "completed_partially"
+      : values.find((task) => PROBLEM.has(task.status))?.status || "completed_with_failures";
+  }
+  return { total, processed, successes, failures, status };
 }
 
 export default function AutomacaoFeedbackModal({
   aberto,
   solicitacoes,
-  titulo = 'Automação WhatsApp',
+  titulo = "Automação de mensagens",
   timeoutAlertaSegundos = 180,
+  permitirCancelamento = false,
   onClose,
   onCancelado,
   onConcluido,
   onErro,
 }) {
-  const ids = useMemo(() => normalizarIds(solicitacoes), [solicitacoes]);
-  const pollingRef = useRef(null);
-  const timerRef = useRef(null);
-  const inicioRef = useRef(null);
-  const [statusPorId, setStatusPorId] = useState({});
-  const [duracaoSegundos, setDuracaoSegundos] = useState(0);
-  const [cancelando, setCancelando] = useState(false);
-  const [erroCancelamento, setErroCancelamento] = useState('');
-  const [mostrarAlertaTimeout, setMostrarAlertaTimeout] = useState(false);
-  const resumo = useMemo(() => resumirStatus(statusPorId), [statusPorId]);
-
-  function limparPolling() {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-  }
-
-  function limparTimerVisual() {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }
-
-  function limparTimers() {
-    limparPolling();
-    limparTimerVisual();
-  }
-
-  async function consultarTodos() {
-    if (!ids.length) return;
-
-    const resultados = await Promise.all(
-      ids.map(async (id) => {
-        const data = await consultarStatusAutomacao(id);
-        return [id, data.automacao || { id, status: 'erro', erro_publico: MENSAGEM_ERRO_AUTOMACAO }];
-      })
-    );
-
-    const proximoStatus = Object.fromEntries(resultados);
-    setStatusPorId(proximoStatus);
-
-    const resumoAtual = resumirStatus(proximoStatus);
-    const duracaoAtual = Math.floor((Date.now() - inicioRef.current) / 1000);
-    setDuracaoSegundos(duracaoAtual);
-
-    if (!STATUS_EM_ANDAMENTO.has(resumoAtual.statusGeral)) {
-      limparTimers();
-      setDuracaoSegundos(duracaoAtual);
-      if (resumoAtual.statusGeral === 'concluido') onConcluido?.({ duracaoSegundos: duracaoAtual, statusPorId: proximoStatus });
-      else onErro?.({ duracaoSegundos: duracaoAtual, statusPorId: proximoStatus });
-    }
-  }
+  const ids = useMemo(() => normalizeIds(solicitacoes), [solicitacoes]);
+  const idsKey = ids.join(",");
+  const [tasks, setTasks] = useState({});
+  const [durationSeconds, setDurationSeconds] = useState(0);
+  const [timeoutWarning, setTimeoutWarning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const startedAt = useRef(0);
+  const summary = useMemo(() => summarize(tasks), [tasks]);
 
   useEffect(() => {
     if (!aberto || !ids.length) return undefined;
+    let active = true;
+    let finishedNotified = false;
+    let polling;
+    let timer;
+    startedAt.current = Date.now();
+    setTasks(Object.fromEntries(ids.map((id) => [id, {
+      taskId: id,
+      status: "queued",
+      total: 0,
+      processed: 0,
+      successCount: 0,
+      failureCount: 0,
+      results: [],
+    }])));
+    setDurationSeconds(0);
+    setTimeoutWarning(false);
+    setCancelError("");
 
-    let ativo = true;
-
-    async function consultarTodosSeguro() {
-      if (!ids.length) return;
-
-      const resultados = await Promise.all(
-        ids.map(async (id) => {
-          const data = await consultarStatusAutomacao(id);
-          return [id, data.automacao || { id, status: 'erro', erro_publico: MENSAGEM_ERRO_AUTOMACAO }];
-        })
-      );
-
-      if (!ativo) return;
-
-      const proximoStatus = Object.fromEntries(resultados);
-      setStatusPorId(proximoStatus);
-
-      const resumoAtual = resumirStatus(proximoStatus);
-      const duracaoAtual = Math.floor((Date.now() - inicioRef.current) / 1000);
-      setDuracaoSegundos(duracaoAtual);
-
-      if (!STATUS_EM_ANDAMENTO.has(resumoAtual.statusGeral)) {
-        limparTimers();
-        setDuracaoSegundos(duracaoAtual);
-        if (resumoAtual.statusGeral === 'concluido') onConcluido?.({ duracaoSegundos: duracaoAtual, statusPorId: proximoStatus });
-        else onErro?.({ duracaoSegundos: duracaoAtual, statusPorId: proximoStatus });
+    async function refresh() {
+      const responses = await Promise.all(ids.map((id) => consultarStatusAutomacao(id)));
+      if (!active) return;
+      const next = Object.fromEntries(responses.map(({ task }) => [task.taskId, task]));
+      setTasks(next);
+      const current = summarize(next);
+      if (!ONGOING.has(current.status) && !finishedNotified) {
+        finishedNotified = true;
+        if (polling) clearInterval(polling);
+        if (timer) clearInterval(timer);
+        const elapsed = Math.floor((Date.now() - startedAt.current) / 1000);
+        if (SUCCESS.has(current.status)) onConcluido?.({ duracaoSegundos: elapsed, tarefas: next });
+        else onErro?.({ duracaoSegundos: elapsed, tarefas: next });
       }
     }
 
-    limparTimers();
-    inicioRef.current = Date.now();
-    setDuracaoSegundos(0);
-    setCancelando(false);
-    setErroCancelamento('');
-    setMostrarAlertaTimeout(false);
-    setStatusPorId(Object.fromEntries(ids.map((id) => [id, { id, status: 'pendente' }])));
-
-    consultarTodosSeguro().catch((error) => {
-      if (!ativo) return;
-      limparTimers();
-      setStatusPorId(Object.fromEntries(ids.map((id) => [id, { id, status: 'erro', erro_publico: MENSAGEM_ERRO_AUTOMACAO }])));
-      onErro?.({ duracaoSegundos: 0, statusPorId: {} });
+    refresh().catch(() => {
+      if (!active) return;
+      setCancelError("Não foi possível consultar a tarefa. A execução continua no servidor.");
     });
-
-    pollingRef.current = setInterval(() => {
-      consultarTodosSeguro().catch((error) => {
-        if (!ativo) return;
-        limparTimers();
-        setStatusPorId(Object.fromEntries(ids.map((id) => [id, { id, status: 'erro', erro_publico: MENSAGEM_ERRO_AUTOMACAO }])));
+    polling = setInterval(() => {
+      refresh().catch(() => {
+        if (active) setCancelError("Comunicação temporariamente indisponível. Tentando novamente...");
       });
     }, 3000);
-
-    timerRef.current = setInterval(() => {
-      if (!ativo || !inicioRef.current) return;
-
-      const duracaoAtual = Math.floor((Date.now() - inicioRef.current) / 1000);
-      setDuracaoSegundos(duracaoAtual);
-
-      if (duracaoAtual >= timeoutAlertaSegundos) {
-        setMostrarAlertaTimeout(true);
-      }
+    timer = setInterval(() => {
+      if (!active) return;
+      const elapsed = Math.floor((Date.now() - startedAt.current) / 1000);
+      setDurationSeconds(elapsed);
+      if (elapsed >= timeoutAlertaSegundos) setTimeoutWarning(true);
     }, 1000);
 
     return () => {
-      ativo = false;
-      limparTimers();
+      active = false;
+      clearInterval(polling);
+      clearInterval(timer);
     };
-  }, [aberto, ids.join(','), timeoutAlertaSegundos]);
+  }, [aberto, idsKey, timeoutAlertaSegundos]);
 
   if (!aberto) return null;
 
-  const total = ids.length;
-  const podeCancelar = resumo.statusGeral === 'pendente' && resumo.executando === 0 && resumo.concluidas === 0 && resumo.problemas === 0;
-  const finalizado = !STATUS_EM_ANDAMENTO.has(resumo.statusGeral);
-  const statusExecutando = resumo.statusGeral === 'executando';
-  const mensagemErroPublica = Object.values(statusPorId)
-    .find((item) => STATUS_FINAIS_PROBLEMA.has(item.status) && item.erro_publico)
-    ?.erro_publico || MENSAGEM_ERRO_AUTOMACAO;
+  const taskList = Object.values(tasks);
+  const primaryTask = taskList[0] || {};
+  const ongoing = ONGOING.has(summary.status);
+  const failures = taskList.flatMap((task) => (
+    (task.results || []).filter((result) => result.status === "failed")
+  ));
+  const cancellable = permitirCancelamento
+    && taskList.length > 0
+    && taskList.every((task) => ["waiting_for_machine", "queued"].includes(task.status));
 
-  async function handleCancelar() {
-    if (!podeCancelar || cancelando) return;
-
-    setCancelando(true);
-    setErroCancelamento('');
-
+  async function handleCancel() {
+    if (!cancellable || cancelling) return;
+    setCancelling(true);
+    setCancelError("");
     try {
-      const idsPendentes = Object.values(statusPorId)
-        .filter((item) => item.status === 'pendente')
-        .map((item) => Number(item.id));
-
-      await Promise.all(idsPendentes.map((id) => cancelarAutomacao(id)));
-      limparTimers();
-      setStatusPorId((atual) => {
-        const proximo = { ...atual };
-        idsPendentes.forEach((id) => {
-          proximo[id] = { ...(proximo[id] || { id }), status: 'cancelado', erro_publico: 'Solicitação cancelada antes do início da execução.' };
-        });
-        return proximo;
-      });
+      await Promise.all(taskList.map((task) => cancelarAutomacao(task.taskId)));
       onCancelado?.();
     } catch (error) {
-      setErroCancelamento(error.message || 'Não foi possível cancelar. Consulte o status novamente.');
-      await consultarTodos().catch(() => null);
+      setCancelError(error.message || "Não foi possível cancelar a tarefa.");
     } finally {
-      setCancelando(false);
+      setCancelling(false);
     }
   }
 
   return (
     <div className="modal-backdrop automation-feedback-backdrop">
-      <div className={`content-card modal-card automation-feedback-modal ${resumo.statusGeral === 'erro' ? 'automation-feedback-error' : ''}`}>
-        {!finalizado ? (
-          <>
-            <div className="automation-spinner" aria-hidden="true" />
-            <h2>{statusExecutando ? 'Automação em execução' : titulo}</h2>
-            <p>{statusExecutando ? 'O robô local já iniciou o envio pelo WhatsApp Web.' : 'Solicitação registrada. Aguardando o robô local iniciar.'}</p>
-            <small>
-              {total > 1
-                ? `${resumo.concluidas}/${total} tarefa(s) concluída(s). Pendentes: ${resumo.pendentes}. Executando: ${resumo.executando}.`
-                : `Status atual: ${statusExecutando ? 'executando' : 'pendente'}.`}
-            </small>
-            <strong className="automation-timer">Tempo: {formatarDuracao(duracaoSegundos)}</strong>
+      <div className={`content-card modal-card automation-feedback-modal ${PROBLEM.has(summary.status) ? "automation-feedback-error" : ""}`}>
+        {ongoing && <div className="automation-spinner" aria-hidden="true" />}
+        {!ongoing && SUCCESS.has(summary.status) && <div className="automation-success-icon">✓</div>}
+        {!ongoing && PROBLEM.has(summary.status) && <div className="automation-error-icon">!</div>}
 
-            {podeCancelar ? (
-              <button className="btn-secondary automation-cancel-button" type="button" onClick={handleCancelar} disabled={cancelando}>
-                {cancelando ? 'Cancelando...' : 'Cancelar envio'}
-              </button>
-            ) : (
-              <small className="automation-cancel-disabled">Cancelamento indisponível após o início da execução.</small>
-            )}
+        <h2>{ongoing ? titulo : STATUS_LABELS[summary.status] || titulo}</h2>
+        <p>
+          Máquina {primaryTask.machineNumber || "—"}: {STATUS_LABELS[primaryTask.status] || "Consultando"}.
+          {primaryTask.queuePosition ? ` Posição aproximada na fila: ${primaryTask.queuePosition}.` : ""}
+        </p>
 
-            {mostrarAlertaTimeout && (
-              <p className="automation-timeout-alert">
-                A automação está demorando mais do que o esperado para responder. Por favor, verifique se a máquina local destinada aos disparos está ligada, conectada à internet e com o WhatsApp Web devidamente logado.
-              </p>
-            )}
+        <div className="automation-task-progress" role="status">
+          <strong>{summary.processed} de {summary.total} processados</strong>
+          <span>Sucessos: {summary.successes}</span>
+          <span>Falhas: {summary.failures}</span>
+          <span>Restantes: {Math.max(summary.total - summary.processed, 0)}</span>
+        </div>
 
-            {erroCancelamento && <p className="automation-cancel-error">{erroCancelamento}</p>}
-          </>
-        ) : resumo.statusGeral === 'concluido' ? (
-          <>
-            <div className="automation-success-icon">✓</div>
-            <h2>Automação concluída</h2>
-            <p>Envio finalizado com sucesso em {formatarDuracao(duracaoSegundos)}.</p>
-            <button className="btn-primary" type="button" onClick={onClose}>Fechar</button>
-          </>
-        ) : resumo.statusGeral === 'cancelado' || Object.values(statusPorId).every((item) => item.status === 'cancelado') ? (
-          <>
-            <div className="automation-error-icon">×</div>
-            <h2>Envio cancelado</h2>
-            <p>A solicitação foi cancelada antes do robô local iniciar.</p>
-            <button className="btn-primary" type="button" onClick={onClose}>Fechar</button>
-          </>
-        ) : (
-          <>
-            <div className="automation-error-icon">!</div>
-            <h2>Erro na automação</h2>
-            <p>Uma ou mais tarefas não foram concluídas.</p>
-            <p>{mensagemErroPublica}</p>
-            <button className="btn-primary" type="button" onClick={onClose}>Entendi</button>
-          </>
+        {failures.length > 0 && (
+          <div className="automation-failure-list">
+            <h3>Não notificados</h3>
+            {failures.map((result) => (
+              <div key={result.deliveryId} className="automation-failure-item">
+                <strong>{result.studentName || result.groupName || result.recipientName || "Destinatário"}</strong>
+                {result.studentName && result.recipientName && (
+                  <span>Responsável: {result.recipientName}</span>
+                )}
+                <small>{result.errorMessage || "Não foi possível concluir o envio."}</small>
+              </div>
+            ))}
+          </div>
         )}
+
+        {ongoing && <strong className="automation-timer">Tempo: {durationLabel(durationSeconds)}</strong>}
+        {timeoutWarning && ongoing && (
+          <p className="automation-timeout-alert">
+            A tarefa permanece salva. Verifique o estado da máquina; você pode fechar esta janela e consultar novamente depois.
+          </p>
+        )}
+        {cancelError && <p className="automation-cancel-error">{cancelError}</p>}
+
+        <div className="automation-modal-actions">
+          {cancellable && (
+            <button className="btn-secondary automation-cancel-button" type="button" onClick={handleCancel} disabled={cancelling}>
+              {cancelling ? "Cancelando..." : "Cancelar tarefa"}
+            </button>
+          )}
+          <button className="btn-primary" type="button" onClick={onClose}>
+            {ongoing ? "Fechar e acompanhar depois" : "Fechar"}
+          </button>
+        </div>
       </div>
     </div>
   );

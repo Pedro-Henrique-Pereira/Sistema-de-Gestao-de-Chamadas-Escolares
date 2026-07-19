@@ -29,15 +29,4 @@ router.put('/preferencias', auditarMutacao({
   descricao: 'Atualizou preferências administrativas de mensagens.',
   detalhes: ({ req }) => ({ maquina: req.body.maquina || req.body.maquinaDestino }),
 }), mensagensController.salvarPreferencias);
-router.post('/enviar', auditarMutacao({
-  acao: 'AUTOMACAO_MENSAGEM_EXECUTADA', entidade: 'automacao',
-  entidadeId: ({ payload }) => payload.id || payload.tarefa.id,
-  descricao: 'Solicitou o envio administrativo de mensagem para grupo.',
-  detalhes: ({ req }) => ({ grupo_id: req.body.grupo_id || req.body.grupoId, maquina: req.body.maquina }),
-}), mensagensController.enviarMensagem);
-router.post('/limpar-tarefas-antigas', auditarMutacao({
-  acao: 'LIMPEZA_AUTOMACAO_EXECUTADA', entidade: 'automacao',
-  descricao: 'Executou a limpeza administrativa de tarefas antigas.',
-}), mensagensController.limparTarefasAntigas);
-
 module.exports = router;

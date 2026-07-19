@@ -34,16 +34,3 @@ export function salvarPreferenciasMensagens(maquinaPadraoMensagens) {
     body: JSON.stringify({ maquinaPadraoMensagens }),
   });
 }
-
-export function enviarMensagemGrupos({ modoDestinatarios, grupos, mensagem, maquinaDestino }) {
-  return apiFetch('/api/mensagens/enviar', {
-    method: 'POST',
-    body: JSON.stringify({ modoDestinatarios, grupos, mensagem, maquinaDestino }),
-  });
-}
-
-export function limparTarefasAntigasAutomacao() {
-  return apiFetch('/api/mensagens/limpar-tarefas-antigas', {
-    method: 'POST',
-  });
-}

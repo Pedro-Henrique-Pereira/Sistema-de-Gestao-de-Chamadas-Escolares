@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import socket
 from dataclasses import dataclass
@@ -56,7 +57,8 @@ def _is_unsafe_chrome_profile(path: Path) -> bool:
 @dataclass(frozen=True)
 class Settings:
     api_base_url: str = os.getenv("API_BASE_URL", "http://127.0.0.1:3001").rstrip("/")
-    automation_api_token: str = os.getenv("AUTOMATION_API_TOKEN", "")
+    automation_machine_tokens_raw: str = os.getenv("AUTOMATION_MACHINE_TOKENS", "")
+    app_version: str = os.getenv("AUTOMATION_APP_VERSION", "2.0.0").strip()
     api_timeout_seconds: int = _int_env("API_TIMEOUT_SECONDS", default=20)
     api_retry_delay_seconds: int = _int_env("API_RETRY_DELAY_SECONDS", default=15)
     allow_insecure_http: bool = _bool_env("ALLOW_INSECURE_HTTP", False)
@@ -116,6 +118,48 @@ class Settings:
             return BASE_DIR / "runtime" / "whatsapp-profile"
         return configured
 
+    @property
+    def automation_machine_tokens(self) -> dict[int, str]:
+        try:
+            parsed = json.loads(self.automation_machine_tokens_raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "AUTOMATION_MACHINE_TOKENS deve ser um objeto JSON válido."
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise RuntimeError("AUTOMATION_MACHINE_TOKENS deve mapear máquinas para tokens.")
+
+        tokens: dict[int, str] = {}
+        for raw_machine, raw_token in parsed.items():
+            try:
+                machine_id = int(raw_machine)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("AUTOMATION_MACHINE_TOKENS contém uma máquina inválida.") from exc
+            token = str(raw_token or "")
+            if machine_id not in {1, 2, 3, 4, 5} or len(token) < 32:
+                raise RuntimeError(
+                    f"Credencial da máquina {machine_id} inválida ou menor que 32 caracteres."
+                )
+            tokens[machine_id] = token
+
+        if not tokens:
+            raise RuntimeError("Configure pelo menos uma credencial em AUTOMATION_MACHINE_TOKENS.")
+        if len(set(tokens.values())) != len(tokens):
+            raise RuntimeError("Cada máquina deve possuir uma credencial exclusiva.")
+        return tokens
+
+    @property
+    def available_machine_ids(self) -> tuple[int, ...]:
+        return tuple(sorted(self.automation_machine_tokens))
+
+    def token_for_machine(self, machine_id: int) -> str:
+        token = self.automation_machine_tokens.get(int(machine_id))
+        if not token:
+            raise RuntimeError(
+                f"A máquina {machine_id} não possui credencial configurada nesta instalação."
+            )
+        return token
+
     def validate(self) -> None:
         parsed = urlparse(self.api_base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -125,12 +169,11 @@ class Settings:
             raise RuntimeError(
                 "API_BASE_URL remota deve usar HTTPS. Use ALLOW_INSECURE_HTTP=true apenas em rede local controlada."
             )
-        if len(self.automation_api_token) < 32:
-            raise RuntimeError(
-                "AUTOMATION_API_TOKEN ausente ou fraco. Configure a credencial das máquinas autorizadas."
-            )
         if self.numero_maquina not in {1, 2, 3, 4, 5}:
             raise RuntimeError("NUMERO_MAQUINA deve estar entre 1 e 5.")
+        self.token_for_machine(self.numero_maquina)
+        if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?", self.app_version):
+            raise RuntimeError("AUTOMATION_APP_VERSION deve usar o formato 2.0.0.")
         if not re.fullmatch(r"[a-zA-Z0-9._:-]{3,80}", self.worker_id):
             raise RuntimeError("AUTOMATION_WORKER_ID possui formato inválido.")
         if not 3 <= self.api_timeout_seconds <= 120:

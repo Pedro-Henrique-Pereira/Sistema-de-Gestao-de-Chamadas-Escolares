@@ -1,377 +1,503 @@
 const db = require("../database/db");
+const {
+  compareVersions,
+  maskPhone,
+  normalizePhone,
+  publicErrorMessage,
+  renderAttendanceMessage,
+  safeErrorCode,
+} = require("./automationDomain");
+const {
+  recordEvent,
+  updateTaskCounters,
+} = require("./automationTaskService");
 
-const STATUS_ENTREGA = new Set(["enviado", "erro", "ignorado"]);
+const DELIVERY_RESULTS = new Set(["enviado", "erro", "ignorado"]);
+const MACHINE_STATES = new Set([
+  "online_available",
+  "online_busy",
+  "online_error",
+  "updating",
+]);
+const TEMPORARY_ERROR_CODES = new Set([
+  "TEMPORARY_ERROR",
+  "NETWORK_ERROR",
+  "TIMEOUT",
+  "WHATSAPP_UNAVAILABLE",
+  "WEBDRIVER_ERROR",
+  "LEASE_EXPIRED",
+]);
 const WORKER_ID_PATTERN = /^[a-zA-Z0-9._:-]{3,80}$/;
 
-function inteiroEnv(nome, padrao, minimo, maximo) {
-  const valor = Number(process.env[nome] || padrao);
-  if (!Number.isInteger(valor)) return padrao;
-  return Math.max(minimo, Math.min(maximo, valor));
+function integerEnv(name, fallback, minimum, maximum) {
+  const value = Number(process.env[name] || fallback);
+  if (!Number.isInteger(value)) return fallback;
+  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function configuracao() {
   return {
-    maxTentativas: inteiroEnv("AUTOMATION_DELIVERY_MAX_ATTEMPTS", 3, 1, 5),
-    leaseSeconds: inteiroEnv("AUTOMATION_DELIVERY_LEASE_SECONDS", 300, 60, 1800),
-    batchSize: inteiroEnv("AUTOMATION_DELIVERY_BATCH_SIZE", 25, 1, 100),
+    maxTentativas: integerEnv("AUTOMATION_DELIVERY_MAX_ATTEMPTS", 3, 1, 5),
+    leaseSeconds: integerEnv("AUTOMATION_DELIVERY_LEASE_SECONDS", 300, 60, 1800),
+    batchSize: integerEnv("AUTOMATION_DELIVERY_BATCH_SIZE", 25, 1, 100),
+    heartbeatTimeoutSeconds: integerEnv("AUTOMATION_HEARTBEAT_TIMEOUT_SECONDS", 60, 30, 300),
     countryCode: String(process.env.AUTOMATION_DEFAULT_COUNTRY_CODE || "55").replace(/\D/g, "") || "55",
   };
 }
 
-function validarWorkerId(valor) {
-  const workerId = String(valor || "").trim();
+function validarWorkerId(value) {
+  const workerId = String(value || "").trim();
   if (!WORKER_ID_PATTERN.test(workerId)) {
     const error = new Error("Identificador do worker inválido.");
     error.status = 400;
+    error.code = "INVALID_WORKER";
     throw error;
   }
   return workerId;
 }
 
-function parsePayload(valor) {
-  if (!valor) return {};
-  if (typeof valor === "object") return valor;
+function validarVersao(value) {
+  const version = String(value || "").trim();
+  if (!/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(version)) {
+    const error = new Error("Versão do aplicativo inválida.");
+    error.status = 400;
+    error.code = "INVALID_APP_VERSION";
+    throw error;
+  }
+  return version;
+}
+
+function parsePayload(value) {
+  if (!value) return {};
+  if (typeof value === "object") return value;
   try {
-    const parsed = JSON.parse(valor);
+    const parsed = JSON.parse(value);
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
   }
 }
 
-function dataReferenciaTarefa(tarefa) {
-  const payload = parsePayload(tarefa.payload);
-  const data = String(payload.data || "").trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(data) ? data : null;
+function lockOwner(machineId, workerId) {
+  return `machine-${machineId}:${workerId}`.slice(0, 100);
 }
 
-function normalizarTelefone(valor, countryCode) {
-  let digits = String(valor || "").replace(/\D/g, "");
-  if (!digits) return "";
-  digits = digits.replace(/^0+/, "");
-  if (!digits.startsWith(countryCode)) digits = `${countryCode}${digits}`;
-  return digits.length >= 12 && digits.length <= 15 ? digits : "";
+async function prepareLegacyAttendanceDeliveries(connection, task, cfg) {
+  const payload = parsePayload(task.payload);
+  const date = String(payload.data || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const error = new Error("Tarefa legada sem data válida.");
+    error.code = "INVALID_REFERENCE_DATE";
+    throw error;
+  }
+  const [rows] = await connection.execute(
+    `SELECT
+       MIN(f.id) AS frequencia_id,
+       f.aluno_id,
+       MAX(f.aluno_nome) AS aluno_nome,
+       r.id AS responsavel_id,
+       r.nome AS responsavel_nome,
+       r.contato AS responsavel_contato
+     FROM registros_frequencia_alunos f
+     INNER JOIN responsaveis r
+       ON r.id = (
+         SELECT r2.id
+           FROM responsaveis r2
+          WHERE r2.aluno_id = f.aluno_id
+            AND r2.ativo = TRUE
+          ORDER BY r2.id ASC
+          LIMIT 1
+       )
+     WHERE f.data_chamada = ?
+       AND LOWER(COALESCE(f.status, '')) = 'ausente'
+       AND COALESCE(f.atrasado, FALSE) = FALSE
+     GROUP BY f.aluno_id, r.id, r.nome, r.contato
+     ORDER BY MIN(f.id) ASC`,
+    [date]
+  );
+  for (const row of rows) {
+    const phone = normalizePhone(row.responsavel_contato, cfg.countryCode);
+    const code = phone ? null : "INVALID_PHONE";
+    await connection.execute(
+      `INSERT IGNORE INTO automacao_entregas (
+        fila_automacao_id,
+        chave_idempotencia,
+        tipo_destino,
+        destinatario_nome,
+        aluno_id,
+        aluno_nome,
+        frequencia_aluno_id,
+        responsavel_id,
+        data_referencia,
+        telefone_destino,
+        telefone_mascarado,
+        mensagem,
+        status,
+        retentavel,
+        erro_codigo,
+        erro_mensagem,
+        concluido_em
+      ) VALUES (?, ?, 'responsavel', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        task.id,
+        `legacy-attendance:${date}:${row.aluno_id}`,
+        row.responsavel_nome,
+        row.aluno_id,
+        row.aluno_nome,
+        row.frequencia_id,
+        row.responsavel_id,
+        date,
+        phone || null,
+        maskPhone(phone || row.responsavel_contato),
+        renderAttendanceMessage(task.mensagem, {
+          guardianName: row.responsavel_nome,
+          studentName: row.aluno_nome,
+          absenceDate: date,
+        }),
+        code ? "erro" : "pendente",
+        !code,
+        code,
+        code ? publicErrorMessage(code) : null,
+        code ? new Date() : null,
+      ]
+    );
+  }
 }
 
-function renderizarMensagem(modelo, dados) {
-  return String(modelo || "")
-    .replaceAll("{nome_responsavel}", String(dados.nomeResponsavel || "").trim())
-    .replaceAll("{nome_aluno}", String(dados.nomeAluno || "").trim())
-    .replaceAll("{data}", String(dados.data || "").split("-").reverse().join("/"))
-    .trim();
-}
-
-function lockOwner(maquinaId, workerId) {
-  return `maquina-${maquinaId}:${workerId}`.slice(0, 100);
-}
-
-async function prepararEntregasFaltas(connection, tarefa, dataReferencia) {
+async function prepareLegacyGroupDelivery(connection, task) {
+  const payload = parsePayload(task.payload);
+  const groupId = Number(payload.grupo_whatsapp_id);
+  if (!Number.isInteger(groupId) || groupId <= 0) {
+    const error = new Error("Tarefa legada de grupo inválida.");
+    error.code = "INVALID_GROUP";
+    throw error;
+  }
+  const [[group]] = await connection.execute(
+    "SELECT id, nome_grupo FROM grupos_whatsapp WHERE id = ? AND ativo = TRUE LIMIT 1",
+    [groupId]
+  );
+  if (!group) {
+    const error = new Error("Grupo legado indisponível.");
+    error.code = "GROUP_NOT_FOUND";
+    throw error;
+  }
   await connection.execute(
-    `
-    INSERT IGNORE INTO automacao_entregas (
+    `INSERT IGNORE INTO automacao_entregas (
       fila_automacao_id,
       chave_idempotencia,
       tipo_destino,
-      aluno_id,
-      frequencia_aluno_id,
-      responsavel_id,
-      data_referencia,
-      status
-    )
-    SELECT
-      ?,
-      CONCAT('falta:', ?, ':', rfa.aluno_id),
-      'responsavel',
-      rfa.aluno_id,
-      MIN(rfa.id),
-      r.id,
-      ?,
-      'pendente'
-    FROM registros_frequencia_alunos rfa
-    INNER JOIN alunos a
-      ON a.id = rfa.aluno_id
-     AND a.ativo = TRUE
-    INNER JOIN responsaveis r
-      ON r.id = (
-        SELECT r2.id
-        FROM responsaveis r2
-        WHERE r2.aluno_id = rfa.aluno_id
-          AND r2.ativo = TRUE
-        ORDER BY r2.id ASC
-        LIMIT 1
-      )
-    WHERE rfa.data_chamada = ?
-      AND LOWER(COALESCE(rfa.status, '')) = 'ausente'
-      AND COALESCE(rfa.atrasado, FALSE) = FALSE
-    GROUP BY rfa.aluno_id, r.id
-    `,
-    [tarefa.id, dataReferencia, dataReferencia, dataReferencia]
-  );
-}
-
-async function prepararEntregaGrupo(connection, tarefa) {
-  const payload = parsePayload(tarefa.payload);
-  const grupoId = Number(payload.grupo_whatsapp_id);
-  if (!Number.isInteger(grupoId) || grupoId <= 0) {
-    const error = new Error("Tarefa de grupo sem identificador válido.");
-    error.code = "GRUPO_INVALIDO";
-    throw error;
-  }
-
-  const [[grupo]] = await connection.execute(
-    "SELECT id FROM grupos_whatsapp WHERE id = ? AND ativo = TRUE LIMIT 1",
-    [grupoId]
-  );
-  if (!grupo) {
-    const error = new Error("Grupo do WhatsApp não está ativo ou não existe.");
-    error.code = "GRUPO_INDISPONIVEL";
-    throw error;
-  }
-
-  await connection.execute(
-    `
-    INSERT IGNORE INTO automacao_entregas (
-      fila_automacao_id,
-      chave_idempotencia,
-      tipo_destino,
+      destinatario_nome,
       grupo_whatsapp_id,
-      status
-    )
-    VALUES (?, ?, 'grupo', ?, 'pendente')
-    `,
-    [tarefa.id, `grupo:${tarefa.id}:${grupoId}`, grupoId]
+      grupo_nome,
+      mensagem,
+      status,
+      retentavel
+    ) VALUES (?, ?, 'grupo', ?, ?, ?, ?, 'pendente', TRUE)`,
+    [
+      task.id,
+      `legacy-group:${task.id}:${groupId}`,
+      group.nome_grupo,
+      groupId,
+      group.nome_grupo,
+      String(task.mensagem || "").trim(),
+    ]
   );
 }
 
-async function prepararEntregas(connection, tarefa) {
-  if (tarefa.tipo_automacao === "mensagem_grupo") {
-    await prepararEntregaGrupo(connection, tarefa);
-    return;
+async function prepareLegacyDeliveries(connection, task, cfg) {
+  const [[count]] = await connection.execute(
+    "SELECT COUNT(*) AS total FROM automacao_entregas WHERE fila_automacao_id = ?",
+    [task.id]
+  );
+  if (Number(count.total) > 0 || Number(task.versao_api || 1) >= 2) return;
+  if (task.tipo_automacao === "mensagem_grupo") {
+    await prepareLegacyGroupDelivery(connection, task);
+  } else {
+    await prepareLegacyAttendanceDeliveries(connection, task, cfg);
   }
-
-  const dataReferencia = dataReferenciaTarefa(tarefa);
-  if (!dataReferencia) {
-    const error = new Error("Tarefa de faltas sem data de referência válida.");
-    error.code = "DATA_REFERENCIA_INVALIDA";
-    throw error;
-  }
-  await prepararEntregasFaltas(connection, tarefa, dataReferencia);
+  await updateTaskCounters(connection, task.id);
+  await recordEvent(connection, task.id, "LEGACY_TASK_MATERIALIZED", { status: "pendente" });
 }
 
-async function ignorarEntregasDesatualizadas(connection, tarefaId) {
+async function invalidateChangedAttendance(connection, taskId) {
   await connection.execute(
-    `
-    UPDATE automacao_entregas ae
-    SET ae.status = 'ignorado',
-        ae.concluido_em = NOW(),
-        ae.lock_owner = NULL,
-        ae.lock_adquirido_em = NULL,
-        ae.erro_codigo = 'FALTA_NAO_ELEGIVEL'
-    WHERE ae.fila_automacao_id = ?
-      AND ae.tipo_destino = 'responsavel'
-      AND ae.status IN ('pendente', 'erro')
-      AND NOT EXISTS (
-        SELECT 1
-        FROM registros_frequencia_alunos rfa
-        WHERE rfa.aluno_id = ae.aluno_id
-          AND rfa.data_chamada = ae.data_referencia
-          AND LOWER(COALESCE(rfa.status, '')) = 'ausente'
-          AND COALESCE(rfa.atrasado, FALSE) = FALSE
-      )
-    `,
-    [tarefaId]
+    `UPDATE automacao_entregas delivery
+        LEFT JOIN registros_frequencia_alunos frequency
+          ON frequency.id = delivery.frequencia_aluno_id
+       SET delivery.status = 'ignorado',
+           delivery.retentavel = FALSE,
+           delivery.erro_codigo = 'ATTENDANCE_NOT_ELIGIBLE',
+           delivery.erro_mensagem = ?,
+           delivery.concluido_em = NOW(),
+           delivery.lock_owner = NULL,
+           delivery.lock_adquirido_em = NULL
+     WHERE delivery.fila_automacao_id = ?
+       AND delivery.tipo_destino = 'responsavel'
+       AND delivery.status IN ('pendente', 'erro')
+       AND (
+         frequency.id IS NULL
+         OR LOWER(COALESCE(frequency.status, '')) <> 'ausente'
+         OR COALESCE(frequency.atrasado, FALSE) = TRUE
+       )`,
+    [publicErrorMessage("ATTENDANCE_NOT_ELIGIBLE"), taskId]
   );
 }
 
-async function reservarLote(connection, tarefaId, owner, cfg) {
+async function reserveBatch(connection, taskId, owner, cfg) {
   await connection.execute(
-    `
-    UPDATE automacao_entregas
-    SET status = 'erro',
-        lock_owner = NULL,
-        lock_adquirido_em = NULL,
-        erro_codigo = COALESCE(erro_codigo, 'LEASE_EXPIRADO')
-    WHERE fila_automacao_id = ?
-      AND status = 'processando'
-      AND lock_adquirido_em < TIMESTAMPADD(SECOND, -?, NOW())
-    `,
-    [tarefaId, cfg.leaseSeconds]
+    `UPDATE automacao_entregas
+        SET status = 'erro',
+            retentavel = TRUE,
+            lock_owner = NULL,
+            lock_adquirido_em = NULL,
+            erro_codigo = 'LEASE_EXPIRED',
+            erro_mensagem = ?
+      WHERE fila_automacao_id = ?
+        AND status = 'processando'
+        AND lock_adquirido_em < TIMESTAMPADD(SECOND, -?, NOW())`,
+    [publicErrorMessage("LEASE_EXPIRED"), taskId, cfg.leaseSeconds]
   );
+  await invalidateChangedAttendance(connection, taskId);
 
-  await ignorarEntregasDesatualizadas(connection, tarefaId);
-
-  const [candidatas] = await connection.execute(
-    `
-    SELECT id
-    FROM automacao_entregas
-    WHERE fila_automacao_id = ?
-      AND (
-        status = 'pendente'
-        OR (status = 'erro' AND tentativas < ?)
-      )
-    ORDER BY id ASC
-    LIMIT ?
-    FOR UPDATE SKIP LOCKED
-    `,
-    [tarefaId, cfg.maxTentativas, cfg.batchSize]
+  const [candidates] = await connection.execute(
+    `SELECT id
+       FROM automacao_entregas
+      WHERE fila_automacao_id = ?
+        AND (
+          status = 'pendente'
+          OR (
+            status = 'erro'
+            AND retentavel = TRUE
+            AND tentativas < ?
+          )
+        )
+      ORDER BY id ASC
+      LIMIT ?
+      FOR UPDATE SKIP LOCKED`,
+    [taskId, cfg.maxTentativas, cfg.batchSize]
   );
-
-  const ids = candidatas.map((row) => Number(row.id)).filter(Number.isInteger);
+  const ids = candidates.map(({ id }) => Number(id)).filter(Number.isInteger);
   if (!ids.length) return [];
-
   const placeholders = ids.map(() => "?").join(", ");
   await connection.execute(
-    `
-    UPDATE automacao_entregas
-    SET status = 'processando',
-        tentativas = tentativas + 1,
-        lock_owner = ?,
-        lock_adquirido_em = NOW(),
-        iniciado_em = COALESCE(iniciado_em, NOW()),
-        erro_codigo = NULL
-    WHERE id IN (${placeholders})
-    `,
+    `UPDATE automacao_entregas
+        SET status = 'processando',
+            tentativas = tentativas + 1,
+            lock_owner = ?,
+            lock_adquirido_em = NOW(),
+            iniciado_em = COALESCE(iniciado_em, NOW()),
+            erro_codigo = NULL,
+            erro_mensagem = NULL
+      WHERE id IN (${placeholders})`,
     [owner, ...ids]
   );
   return ids;
 }
 
-async function montarEntregas(connection, tarefa, ids, cfg) {
+async function existingBatchForOwner(connection, taskId, owner) {
+  const [rows] = await connection.execute(
+    `SELECT id
+       FROM automacao_entregas
+      WHERE fila_automacao_id = ?
+        AND status = 'processando'
+        AND lock_owner = ?
+      ORDER BY id ASC
+      FOR UPDATE`,
+    [taskId, owner]
+  );
+  const ids = rows.map(({ id }) => Number(id)).filter(Number.isInteger);
+  if (ids.length) {
+    await connection.execute(
+      `UPDATE automacao_entregas
+          SET lock_adquirido_em = NOW()
+        WHERE fila_automacao_id = ?
+          AND status = 'processando'
+          AND lock_owner = ?`,
+      [taskId, owner]
+    );
+  }
+  return ids;
+}
+
+async function buildDeliveries(connection, ids) {
   if (!ids.length) return [];
   const placeholders = ids.map(() => "?").join(", ");
   const [rows] = await connection.execute(
-    `
-    SELECT
-      ae.id,
-      ae.tipo_destino,
-      ae.aluno_id,
-      ae.responsavel_id,
-      ae.grupo_whatsapp_id,
-      ae.data_referencia,
-      ae.tentativas,
-      a.nome AS aluno_nome,
-      r.nome AS responsavel_nome,
-      r.contato AS responsavel_contato,
-      g.nome_grupo
-    FROM automacao_entregas ae
-    LEFT JOIN alunos a ON a.id = ae.aluno_id AND a.ativo = TRUE
-    LEFT JOIN responsaveis r ON r.id = ae.responsavel_id AND r.ativo = TRUE
-    LEFT JOIN grupos_whatsapp g ON g.id = ae.grupo_whatsapp_id AND g.ativo = TRUE
-    WHERE ae.id IN (${placeholders})
-    ORDER BY ae.id ASC
-    `,
+    `SELECT
+       id,
+       tipo_destino,
+       telefone_destino,
+       grupo_nome,
+       mensagem,
+       tentativas
+     FROM automacao_entregas
+     WHERE id IN (${placeholders})
+     ORDER BY id ASC`,
     ids
   );
-
-  const payload = parsePayload(tarefa.payload);
-  const entregas = [];
-  for (const row of rows) {
-    if (row.tipo_destino === "grupo") {
-      const nomeGrupo = String(row.nome_grupo || payload.nome_grupo_whatsapp || "").trim();
-      const mensagem = String(tarefa.mensagem || "").trim();
-      if (!nomeGrupo || !mensagem) {
-        await connection.execute(
-          "UPDATE automacao_entregas SET status = 'ignorado', concluido_em = NOW(), lock_owner = NULL, lock_adquirido_em = NULL, erro_codigo = 'GRUPO_SEM_DADOS' WHERE id = ?",
-          [row.id]
-        );
-        continue;
-      }
-      entregas.push({
-        id: Number(row.id),
-        canal: "grupo",
-        nome_grupo: nomeGrupo,
-        nome_grupo_busca: String(payload.nome_grupo_whatsapp_busca || "").trim(),
-        mensagem,
-        tentativa: Number(row.tentativas),
-      });
-      continue;
-    }
-
-    const telefone = normalizarTelefone(row.responsavel_contato, cfg.countryCode);
-    const mensagem = renderizarMensagem(tarefa.mensagem, {
-      nomeResponsavel: row.responsavel_nome,
-      nomeAluno: row.aluno_nome,
-      data: row.data_referencia,
-    });
-    if (!telefone || !mensagem || !row.aluno_nome || !row.responsavel_nome) {
-      await connection.execute(
-        "UPDATE automacao_entregas SET status = 'ignorado', concluido_em = NOW(), lock_owner = NULL, lock_adquirido_em = NULL, erro_codigo = 'DESTINATARIO_INVALIDO' WHERE id = ?",
-        [row.id]
-      );
-      continue;
-    }
-    entregas.push({
-      id: Number(row.id),
-      canal: "responsavel",
-      telefone,
-      mensagem,
-      tentativa: Number(row.tentativas),
-    });
-  }
-  return entregas;
+  return rows.map((row) => ({
+    id: Number(row.id),
+    canal: row.tipo_destino === "grupo" ? "grupo" : "responsavel",
+    telefone: row.tipo_destino === "responsavel" ? row.telefone_destino : undefined,
+    nome_grupo: row.tipo_destino === "grupo" ? row.grupo_nome : undefined,
+    mensagem: row.mensagem,
+    tentativa: Number(row.tentativas),
+  }));
 }
 
-async function resumoEntregas(connection, tarefaId, cfg) {
+async function deliverySummary(connection, taskId, cfg) {
   const [[row]] = await connection.execute(
-    `
-    SELECT
-      COUNT(*) AS total,
-      SUM(status = 'processando') AS processando,
-      SUM(status = 'pendente') AS pendentes,
-      SUM(status = 'erro' AND tentativas < ?) AS retentativas,
-      SUM(status = 'erro' AND tentativas >= ?) AS falhas_finais,
-      SUM(status = 'enviado') AS enviados,
-      SUM(status = 'ignorado') AS ignorados
-    FROM automacao_entregas
-    WHERE fila_automacao_id = ?
-    `,
-    [cfg.maxTentativas, cfg.maxTentativas, tarefaId]
+    `SELECT
+       COUNT(*) AS total,
+       SUM(status = 'processando') AS processando,
+       SUM(status = 'pendente') AS pendentes,
+       SUM(status = 'erro' AND retentavel = TRUE AND tentativas < ?) AS retentativas,
+       SUM(
+         status IN ('ignorado', 'cancelado')
+         OR (status = 'erro' AND (retentavel = FALSE OR tentativas >= ?))
+       ) AS falhas_finais,
+       SUM(status = 'enviado') AS enviados
+     FROM automacao_entregas
+     WHERE fila_automacao_id = ?`,
+    [cfg.maxTentativas, cfg.maxTentativas, taskId]
   );
   return {
     total: Number(row?.total || 0),
-    processando: Number(row?.processando || 0),
-    pendentes: Number(row?.pendentes || 0),
-    retentativas: Number(row?.retentativas || 0),
-    falhasFinais: Number(row?.falhas_finais || 0),
-    enviados: Number(row?.enviados || 0),
-    ignorados: Number(row?.ignorados || 0),
+    processing: Number(row?.processando || 0),
+    pending: Number(row?.pendentes || 0),
+    retries: Number(row?.retentativas || 0),
+    failures: Number(row?.falhas_finais || 0),
+    sent: Number(row?.enviados || 0),
   };
 }
 
-async function finalizarTarefaSePossivel(connection, tarefaId, cfg) {
-  const resumo = await resumoEntregas(connection, tarefaId, cfg);
-  const ativas = resumo.processando + resumo.pendentes + resumo.retentativas;
-  if (ativas > 0) return { status: "executando", resumo };
-
-  if (resumo.falhasFinais > 0) {
+async function finalizeTaskIfPossible(connection, taskId, machineId, cfg) {
+  const summary = await deliverySummary(connection, taskId, cfg);
+  const active = summary.processing + summary.pending + summary.retries;
+  if (active > 0) {
     await connection.execute(
-      `
-      UPDATE fila_automacao
-      SET status = 'erro',
-          erro = 'Uma ou mais mensagens atingiram o limite seguro de tentativas.',
-          concluido_em = NOW(),
-          lock_owner = NULL,
-          lock_adquirido_em = NULL
-      WHERE id = ?
-      `,
-      [tarefaId]
+      `UPDATE fila_automacao
+          SET total_destinatarios = ?,
+              total_sucessos = ?,
+              total_falhas = ?
+        WHERE id = ?`,
+      [summary.total, summary.sent, summary.failures, taskId]
     );
-    return { status: "erro", resumo };
+    return { status: "executando", summary };
   }
 
+  let status = "erro";
+  if (summary.total > 0 && summary.sent === summary.total) status = "concluido";
+  else if (summary.sent > 0) status = "concluido_parcial";
+
   await connection.execute(
-    `
-    UPDATE fila_automacao
-    SET status = 'concluido',
-        erro = NULL,
-        concluido_em = NOW(),
-        lock_owner = NULL,
-        lock_adquirido_em = NULL
-    WHERE id = ?
-    `,
-    [tarefaId]
+    `UPDATE fila_automacao
+        SET status = ?,
+            total_destinatarios = ?,
+            total_sucessos = ?,
+            total_falhas = ?,
+            identificador_externo = COALESCE(
+              identificador_externo,
+              (
+                SELECT MIN(delivery.identificador_externo)
+                FROM automacao_entregas delivery
+                WHERE delivery.fila_automacao_id = fila_automacao.id
+                  AND delivery.identificador_externo IS NOT NULL
+              )
+            ),
+            concluido_em = NOW(),
+            erro = ?,
+            lock_owner = NULL,
+            lock_adquirido_em = NULL
+      WHERE id = ?`,
+    [
+      status,
+      summary.total,
+      summary.sent,
+      summary.failures,
+      status === "erro" ? "DELIVERIES_FAILED" : null,
+      taskId,
+    ]
   );
-  return { status: "concluido", resumo };
+  await connection.execute(
+    `UPDATE automacao_maquinas
+        SET tarefa_atual_id = NULL,
+            estado = 'online_available',
+            ultimo_erro_codigo = ?
+      WHERE maquina_id = ?
+        AND tarefa_atual_id = ?`,
+    [status === "erro" ? "DELIVERIES_FAILED" : null, machineId, taskId]
+  );
+  await recordEvent(connection, taskId, "TASK_FINISHED", { status });
+  return { status, summary };
+}
+
+async function getMachineForUpdate(connection, machineId) {
+  const [rows] = await connection.execute(
+    `SELECT *
+       FROM automacao_maquinas
+      WHERE maquina_id = ?
+      LIMIT 1
+      FOR UPDATE`,
+    [machineId]
+  );
+  const machine = rows[0];
+  if (!machine || !machine.habilitada || machine.estado === "disabled") {
+    const error = new Error("Máquina inexistente ou desabilitada.");
+    error.status = 403;
+    error.code = "MACHINE_DISABLED";
+    throw error;
+  }
+  return machine;
+}
+
+async function chooseTask(connection, machine, owner, cfg) {
+  if (machine.tarefa_atual_id) {
+    const [currentRows] = await connection.execute(
+      `SELECT *
+         FROM fila_automacao
+        WHERE id = ?
+          AND maquina_destino = ?
+          AND status IN ('pendente', 'executando')
+        LIMIT 1
+        FOR UPDATE`,
+      [machine.tarefa_atual_id, machine.maquina_id]
+    );
+    const current = currentRows[0];
+    if (current) {
+      const leasedByOther = current.status === "executando"
+        && current.lock_owner
+        && current.lock_owner !== owner
+        && current.lock_adquirido_em
+        && Date.now() - new Date(current.lock_adquirido_em).getTime() < cfg.leaseSeconds * 1000;
+      return leasedByOther ? null : current;
+    }
+    await connection.execute(
+      "UPDATE automacao_maquinas SET tarefa_atual_id = NULL WHERE maquina_id = ?",
+      [machine.maquina_id]
+    );
+  }
+
+  const [rows] = await connection.execute(
+    `SELECT *
+       FROM fila_automacao
+      WHERE maquina_destino = ?
+        AND (
+          status = 'pendente'
+          OR (
+            status = 'executando'
+            AND lock_adquirido_em < TIMESTAMPADD(SECOND, -?, NOW())
+          )
+        )
+      ORDER BY
+        CASE WHEN status = 'executando' THEN 0 ELSE 1 END,
+        data_solicitacao ASC,
+        id ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED`,
+    [machine.maquina_id, cfg.leaseSeconds]
+  );
+  return rows[0] || null;
 }
 
 async function capturarTarefa({ maquinaId, workerId }) {
@@ -379,186 +505,370 @@ async function capturarTarefa({ maquinaId, workerId }) {
   const worker = validarWorkerId(workerId);
   const owner = lockOwner(maquinaId, worker);
   const connection = await db.getConnection();
-  let transacao = false;
-
+  let transaction = false;
   try {
     await connection.beginTransaction();
-    transacao = true;
-
-    const [tarefas] = await connection.execute(
-      `
-      SELECT id, tipo_automacao, maquina_destino, mensagem, payload, status, lock_owner
-      FROM fila_automacao
-      WHERE maquina_destino = ?
-        AND (
-          status = 'pendente'
-          OR (
-            status = 'executando'
-            AND (
-              lock_owner = ?
-              OR lock_adquirido_em < TIMESTAMPADD(SECOND, -?, NOW())
-            )
-          )
-        )
-      ORDER BY (status = 'executando') DESC, data_solicitacao ASC, id ASC
-      LIMIT 1
-      FOR UPDATE SKIP LOCKED
-      `,
-      [maquinaId, owner, cfg.leaseSeconds]
-    );
-
-    const tarefa = tarefas[0];
-    if (!tarefa) {
+    transaction = true;
+    const machine = await getMachineForUpdate(connection, maquinaId);
+    const task = await chooseTask(connection, machine, owner, cfg);
+    if (!task) {
       await connection.commit();
-      transacao = false;
+      transaction = false;
       return null;
     }
 
     await connection.execute(
-      `
-      UPDATE fila_automacao
-      SET status = 'executando',
-          lock_owner = ?,
-          lock_adquirido_em = NOW(),
-          iniciado_em = COALESCE(iniciado_em, NOW()),
-          tentativas = tentativas + IF(status = 'pendente', 1, 0),
-          erro = NULL
-      WHERE id = ?
-      `,
-      [owner, tarefa.id]
+      `UPDATE automacao_maquinas
+          SET tarefa_atual_id = ?,
+              estado = 'online_busy',
+              worker_id = ?,
+              ultima_comunicacao_em = NOW(),
+              ultimo_erro_codigo = NULL
+        WHERE maquina_id = ?`,
+      [task.id, worker, maquinaId]
+    );
+    await connection.execute(
+      `UPDATE fila_automacao
+          SET status = 'executando',
+              lock_owner = ?,
+              lock_adquirido_em = NOW(),
+              iniciado_em = COALESCE(iniciado_em, NOW()),
+              tentativas = tentativas + IF(status = 'pendente', 1, 0),
+              erro = NULL
+        WHERE id = ?`,
+      [owner, task.id]
     );
 
     try {
-      await prepararEntregas(connection, tarefa);
+      await prepareLegacyDeliveries(connection, task, cfg);
     } catch (error) {
       await connection.execute(
-        `
-        UPDATE fila_automacao
-        SET status = 'erro',
-            erro = ?,
-            concluido_em = NOW(),
-            lock_owner = NULL,
-            lock_adquirido_em = NULL
-        WHERE id = ?
-        `,
-        [String(error.code || "TAREFA_INVALIDA").slice(0, 80), tarefa.id]
+        `UPDATE fila_automacao
+            SET status = 'erro',
+                erro = ?,
+                concluido_em = NOW(),
+                lock_owner = NULL,
+                lock_adquirido_em = NULL
+          WHERE id = ?`,
+        [safeErrorCode(error.code, "INVALID_LEGACY_TASK"), task.id]
       );
+      await connection.execute(
+        `UPDATE automacao_maquinas
+            SET tarefa_atual_id = NULL,
+                estado = 'online_error',
+                ultimo_erro_codigo = ?
+          WHERE maquina_id = ?`,
+        [safeErrorCode(error.code, "INVALID_LEGACY_TASK"), maquinaId]
+      );
+      await recordEvent(connection, task.id, "TASK_REJECTED", {
+        status: "erro",
+        errorCode: safeErrorCode(error.code, "INVALID_LEGACY_TASK"),
+      });
       await connection.commit();
-      transacao = false;
+      transaction = false;
       return {
-        id: Number(tarefa.id),
-        tipo: tarefa.tipo_automacao,
+        id: Number(task.id),
+        api_version: Number(task.versao_api || 1),
+        tipo: task.tipo_automacao,
         status: "erro",
         entregas: [],
       };
     }
 
-    const ids = await reservarLote(connection, tarefa.id, owner, cfg);
-    const entregas = await montarEntregas(connection, tarefa, ids, cfg);
-    const finalizacao = await finalizarTarefaSePossivel(connection, tarefa.id, cfg);
-
+    const existingIds = await existingBatchForOwner(connection, task.id, owner);
+    const ids = existingIds.length
+      ? existingIds
+      : await reserveBatch(connection, task.id, owner, cfg);
+    const deliveries = await buildDeliveries(connection, ids);
+    const completion = await finalizeTaskIfPossible(connection, task.id, maquinaId, cfg);
+    if (deliveries.length) {
+      await recordEvent(connection, task.id, "TASK_CLAIMED", { status: "executando" });
+    }
     await connection.commit();
-    transacao = false;
+    transaction = false;
     return {
-      id: Number(tarefa.id),
-      tipo: tarefa.tipo_automacao,
-      status: entregas.length ? "executando" : finalizacao.status,
-      entregas,
-      resumo: finalizacao.resumo,
+      id: Number(task.id),
+      api_version: Number(task.versao_api || 1),
+      tipo: task.tipo_automacao,
+      status: deliveries.length ? "executando" : completion.status,
+      entregas: deliveries,
+      resumo: completion.summary,
     };
   } catch (error) {
-    if (transacao) await connection.rollback();
+    if (transaction) await connection.rollback();
     throw error;
   } finally {
     connection.release();
   }
 }
 
-async function registrarResultado({ maquinaId, workerId, entregaId, status, erroCodigo }) {
+async function registrarResultado({
+  maquinaId,
+  workerId,
+  entregaId,
+  status,
+  erroCodigo,
+  identificadorExterno,
+}) {
   const cfg = configuracao();
   const worker = validarWorkerId(workerId);
   const owner = lockOwner(maquinaId, worker);
   const id = Number(entregaId);
-  if (!Number.isInteger(id) || id <= 0 || !STATUS_ENTREGA.has(status)) {
+  if (!Number.isInteger(id) || id <= 0 || !DELIVERY_RESULTS.has(status)) {
     const error = new Error("Resultado de entrega inválido.");
     error.status = 400;
+    error.code = "INVALID_DELIVERY_RESULT";
     throw error;
   }
-
+  const externalId = identificadorExterno
+    ? String(identificadorExterno).replace(/[^a-zA-Z0-9._:-]/g, "").slice(0, 100)
+    : null;
   const connection = await db.getConnection();
-  let transacao = false;
+  let transaction = false;
   try {
     await connection.beginTransaction();
-    transacao = true;
+    transaction = true;
+    await getMachineForUpdate(connection, maquinaId);
     const [rows] = await connection.execute(
-      `
-      SELECT ae.id, ae.status, ae.fila_automacao_id
-      FROM automacao_entregas ae
-      INNER JOIN fila_automacao fa ON fa.id = ae.fila_automacao_id
-      WHERE ae.id = ?
-        AND fa.maquina_destino = ?
-      LIMIT 1
-      FOR UPDATE
-      `,
+      `SELECT delivery.id, delivery.status, delivery.fila_automacao_id
+         FROM automacao_entregas delivery
+         INNER JOIN fila_automacao task ON task.id = delivery.fila_automacao_id
+        WHERE delivery.id = ?
+          AND task.maquina_destino = ?
+        LIMIT 1
+        FOR UPDATE`,
       [id, maquinaId]
     );
-    const entrega = rows[0];
-    if (!entrega) {
+    const delivery = rows[0];
+    if (!delivery) {
       const error = new Error("Entrega não encontrada para esta máquina.");
       error.status = 404;
+      error.code = "DELIVERY_NOT_FOUND";
       throw error;
     }
-
-    if (["enviado", "ignorado"].includes(entrega.status)) {
-      const finalizacao = await finalizarTarefaSePossivel(connection, entrega.fila_automacao_id, cfg);
+    if (["enviado", "ignorado", "cancelado"].includes(delivery.status)) {
+      const completion = await finalizeTaskIfPossible(
+        connection,
+        delivery.fila_automacao_id,
+        maquinaId,
+        cfg
+      );
       await connection.commit();
-      transacao = false;
-      return { entregaStatus: entrega.status, tarefaStatus: finalizacao.status, resumo: finalizacao.resumo };
+      transaction = false;
+      return {
+        entregaStatus: delivery.status,
+        tarefaStatus: completion.status,
+        resumo: completion.summary,
+      };
     }
 
-    const proximoStatus = status === "enviado" ? "enviado" : status === "ignorado" ? "ignorado" : "erro";
-    const codigoSeguro = String(erroCodigo || (proximoStatus === "erro" ? "FALHA_ENVIO" : ""))
-      .replace(/[^A-Z0-9_.-]/gi, "_")
-      .slice(0, 80) || null;
-
-    const [resultado] = await connection.execute(
-      `
-      UPDATE automacao_entregas
-      SET status = ?,
-          erro_codigo = ?,
-          concluido_em = IF(? IN ('enviado', 'ignorado'), NOW(), NULL),
-          lock_owner = NULL,
-          lock_adquirido_em = NULL
-      WHERE id = ?
-        AND status = 'processando'
-        AND lock_owner = ?
-      `,
-      [proximoStatus, codigoSeguro, proximoStatus, id, owner]
+    const nextStatus = status === "enviado"
+      ? "enviado"
+      : status === "ignorado"
+        ? "ignorado"
+        : "erro";
+    const code = nextStatus === "enviado"
+      ? null
+      : safeErrorCode(erroCodigo, nextStatus === "ignorado" ? "PERMANENT_ERROR" : "TEMPORARY_ERROR");
+    const retryable = nextStatus === "erro" && TEMPORARY_ERROR_CODES.has(code);
+    const [result] = await connection.execute(
+      `UPDATE automacao_entregas
+          SET status = ?,
+              retentavel = ?,
+              erro_codigo = ?,
+              erro_mensagem = ?,
+              identificador_externo = COALESCE(?, identificador_externo),
+              concluido_em = IF(? = 'enviado' OR ? = FALSE OR ? = 'ignorado', NOW(), NULL),
+              lock_owner = NULL,
+              lock_adquirido_em = NULL
+        WHERE id = ?
+          AND status = 'processando'
+          AND lock_owner = ?`,
+      [
+        nextStatus,
+        retryable,
+        code,
+        code ? publicErrorMessage(code) : null,
+        externalId,
+        nextStatus,
+        retryable,
+        nextStatus,
+        id,
+        owner,
+      ]
     );
-    if (resultado.affectedRows !== 1) {
-      const error = new Error("A entrega não está reservada por este worker.");
+    if (result.affectedRows !== 1) {
+      const error = new Error("A entrega não está reservada por esta instância.");
       error.status = 409;
+      error.code = "DELIVERY_LEASE_MISMATCH";
       throw error;
     }
-
-    const finalizacao = await finalizarTarefaSePossivel(connection, entrega.fila_automacao_id, cfg);
+    await recordEvent(connection, delivery.fila_automacao_id, "DELIVERY_RESULT", {
+      deliveryId: id,
+      status: nextStatus,
+      errorCode: code,
+    });
+    const completion = await finalizeTaskIfPossible(
+      connection,
+      delivery.fila_automacao_id,
+      maquinaId,
+      cfg
+    );
     await connection.commit();
-    transacao = false;
-    return { entregaStatus: proximoStatus, tarefaStatus: finalizacao.status, resumo: finalizacao.resumo };
+    transaction = false;
+    return {
+      entregaStatus: nextStatus,
+      tarefaStatus: completion.status,
+      resumo: completion.summary,
+    };
   } catch (error) {
-    if (transacao) await connection.rollback();
+    if (transaction) await connection.rollback();
     throw error;
   } finally {
     connection.release();
   }
 }
 
+async function registrarHeartbeat({
+  maquinaId,
+  workerId,
+  appVersion,
+  state,
+  currentTaskId = null,
+  lastErrorCode = null,
+}) {
+  const worker = validarWorkerId(workerId);
+  const owner = lockOwner(maquinaId, worker);
+  const version = validarVersao(appVersion);
+  const machineState = MACHINE_STATES.has(state) ? state : "online_available";
+  const connection = await db.getConnection();
+  let transaction = false;
+  try {
+    await connection.beginTransaction();
+    transaction = true;
+    const machine = await getMachineForUpdate(connection, maquinaId);
+    if (compareVersions(version, machine.versao_minima) < 0) {
+      const error = new Error(
+        `Aplicativo incompatível. Atualize para a versão ${machine.versao_minima} ou superior.`
+      );
+      error.status = 409;
+      error.code = "APP_VERSION_UNSUPPORTED";
+      throw error;
+    }
+    const taskId = currentTaskId === null || currentTaskId === ""
+      ? machine.tarefa_atual_id
+      : Number(currentTaskId);
+    if (taskId && (!Number.isInteger(Number(taskId)) || Number(taskId) <= 0)) {
+      const error = new Error("Tarefa atual inválida.");
+      error.status = 400;
+      error.code = "INVALID_CURRENT_TASK";
+      throw error;
+    }
+    if (
+      machine.tarefa_atual_id
+      && taskId
+      && Number(machine.tarefa_atual_id) !== Number(taskId)
+    ) {
+      const error = new Error("A máquina não pode assumir uma tarefa diferente da reservada.");
+      error.status = 409;
+      error.code = "MACHINE_TASK_MISMATCH";
+      throw error;
+    }
+    if (machine.tarefa_atual_id) {
+      await connection.execute(
+        `UPDATE fila_automacao
+            SET lock_adquirido_em = NOW()
+          WHERE id = ?
+            AND maquina_destino = ?
+            AND status = 'executando'
+            AND lock_owner = ?`,
+        [machine.tarefa_atual_id, maquinaId, owner]
+      );
+      await connection.execute(
+        `UPDATE automacao_entregas
+            SET lock_adquirido_em = NOW()
+          WHERE fila_automacao_id = ?
+            AND status = 'processando'
+            AND lock_owner = ?`,
+        [machine.tarefa_atual_id, owner]
+      );
+    }
+    await connection.execute(
+      `UPDATE automacao_maquinas
+          SET estado = ?,
+              ultima_comunicacao_em = NOW(),
+              versao_aplicativo = ?,
+              worker_id = ?,
+              ultimo_erro_codigo = ?
+        WHERE maquina_id = ?`,
+      [
+        machine.tarefa_atual_id ? "online_busy" : machineState,
+        version,
+        worker,
+        lastErrorCode ? safeErrorCode(lastErrorCode) : null,
+        maquinaId,
+      ]
+    );
+    const [[queue]] = await connection.execute(
+      `SELECT COUNT(*) AS total
+         FROM fila_automacao
+        WHERE maquina_destino = ?
+          AND status = 'pendente'`,
+      [maquinaId]
+    );
+    await connection.commit();
+    transaction = false;
+    return {
+      machineId: `machine-${maquinaId}`,
+      state: machine.tarefa_atual_id ? "online_busy" : machineState,
+      currentTaskId: machine.tarefa_atual_id ? Number(machine.tarefa_atual_id) : null,
+      queueDepth: Number(queue.total || 0),
+      minimumVersion: machine.versao_minima,
+      serverTime: new Date().toISOString(),
+    };
+  } catch (error) {
+    if (transaction) await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function obterSaude({ maquinaId }) {
+  const [rows] = await db.execute(
+    `SELECT maquina_id, identidade, habilitada, estado, versao_minima
+       FROM automacao_maquinas
+      WHERE maquina_id = ?
+      LIMIT 1`,
+    [maquinaId]
+  );
+  const machine = rows[0];
+  if (!machine || !machine.habilitada) {
+    const error = new Error("Máquina não cadastrada ou desabilitada.");
+    error.status = 403;
+    throw error;
+  }
+  return {
+    status: "ok",
+    maquina_id: Number(machine.maquina_id),
+    machine_id: machine.identidade,
+    minimum_version: machine.versao_minima,
+  };
+}
+
 module.exports = {
   capturarTarefa,
-  registrarResultado,
-  validarWorkerId,
-  normalizarTelefone,
-  renderizarMensagem,
-  parsePayload,
   configuracao,
+  existingBatchForOwner,
+  normalizePhone,
+  obterSaude,
+  parsePayload,
+  registrarHeartbeat,
+  registrarResultado,
+  renderizarMensagem: (template, data) => renderAttendanceMessage(template, {
+    guardianName: data.nomeResponsavel,
+    studentName: data.nomeAluno,
+    absenceDate: data.data,
+  }),
+  validarWorkerId,
 };

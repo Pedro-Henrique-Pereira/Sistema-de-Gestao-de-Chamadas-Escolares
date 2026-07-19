@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -32,6 +33,7 @@ class EntregaAutomacao:
 @dataclass(frozen=True)
 class TarefaAutomacao:
     id: int
+    api_version: int
     tipo: str
     status: str
     entregas: tuple[EntregaAutomacao, ...]
@@ -48,6 +50,19 @@ def mascarar_telefone(valor: str | None) -> str:
 def codigo_erro_seguro(exc: BaseException) -> str:
     if isinstance(exc, AutomationApiError) and exc.status:
         return f"API_{exc.status}"
+    texto = f"{type(exc).__name__} {exc}".lower()
+    if "grupo" in texto and ("não encontr" in texto or "nao encontr" in texto):
+        return "GROUP_NOT_FOUND"
+    if "destinat" in texto and ("não encontr" in texto or "nao encontr" in texto):
+        return "RECIPIENT_NOT_FOUND"
+    if "telefone" in texto or "phone" in texto:
+        return "INVALID_PHONE"
+    if "timeout" in texto or "timed out" in texto:
+        return "TIMEOUT"
+    if "webdriver" in texto or "chrome" in texto or "firefox" in texto:
+        return "WEBDRIVER_ERROR"
+    if "connection" in texto or "network" in texto or "internet" in texto:
+        return "NETWORK_ERROR"
     nome = type(exc).__name__.upper()
     return "".join(char if char.isalnum() else "_" for char in nome)[:80] or "FALHA_ENVIO"
 
@@ -64,10 +79,10 @@ class AutomationApiClient:
         transport: Callable[..., tuple[int, dict[str, Any]]] | None = None,
     ) -> None:
         self.base_url = (base_url or settings.api_base_url).rstrip("/")
-        self._token = token if token is not None else settings.automation_api_token
+        self.machine_id = machine_id if machine_id is not None else settings.numero_maquina
+        self._token = token if token is not None else settings.token_for_machine(self.machine_id)
         self.timeout_seconds = timeout_seconds or settings.api_timeout_seconds
         self.worker_id = worker_id or settings.worker_id
-        self.machine_id = machine_id if machine_id is not None else settings.numero_maquina
         self._transport = transport
 
     def _headers(self) -> dict[str, str]:
@@ -124,6 +139,23 @@ class AutomationApiClient:
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/api/automation-worker/health")
 
+    def heartbeat(
+        self,
+        state: str = "online_available",
+        *,
+        current_task_id: int | None = None,
+        last_error_code: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "worker_id": self.worker_id,
+            "app_version": settings.app_version,
+            "state": state,
+            "current_task_id": current_task_id,
+        }
+        if last_error_code:
+            payload["last_error_code"] = last_error_code[:80]
+        return self._request("POST", "/api/automation-worker/heartbeat", payload)
+
     def capturar_tarefa(self) -> TarefaAutomacao | None:
         data = self._request(
             "POST",
@@ -155,8 +187,16 @@ class AutomationApiClient:
                 )
             )
 
+        api_version = int(tarefa.get("api_version") or 1)
+        if api_version > 2:
+            raise AutomationApiError(
+                "A tarefa usa uma versÃ£o de contrato mais nova que este aplicativo.",
+                retryable=False,
+            )
+
         return TarefaAutomacao(
             id=int(tarefa["id"]),
+            api_version=api_version,
             tipo=str(tarefa.get("tipo") or "faltas"),
             status=str(tarefa.get("status") or "executando"),
             entregas=tuple(entregas),
@@ -168,6 +208,7 @@ class AutomationApiClient:
         entrega_id: int,
         status: str,
         erro_codigo: str | None = None,
+        external_id: str | None = None,
     ) -> dict[str, Any]:
         if status not in {"enviado", "erro", "ignorado"}:
             raise ValueError("Status de resultado inválido.")
@@ -177,6 +218,8 @@ class AutomationApiClient:
         }
         if erro_codigo:
             payload["erro_codigo"] = erro_codigo[:80]
+        if external_id:
+            payload["external_id"] = external_id[:100]
         return self._request(
             "POST",
             f"/api/automation-worker/deliveries/{int(entrega_id)}/result",
@@ -216,12 +259,21 @@ class ReceiptJournal:
         temporary.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.path)
 
-    def record(self, entrega_id: int, status: str) -> None:
+    def record(
+        self,
+        entrega_id: int,
+        status: str,
+        external_id: str | None = None,
+    ) -> None:
         if status not in {"enviado", "ignorado"}:
             raise ValueError("O journal aceita apenas resultados finais sem reenvio.")
         items = self._load()
         if not any(item["entrega_id"] == int(entrega_id) for item in items):
-            items.append({"entrega_id": int(entrega_id), "status": status})
+            items.append({
+                "entrega_id": int(entrega_id),
+                "status": status,
+                "external_id": external_id or f"local-{uuid.uuid4()}",
+            })
             self._save(items)
 
     def pending_count(self) -> int:
@@ -233,7 +285,11 @@ class ReceiptJournal:
         confirmed = 0
         for index, item in enumerate(items):
             try:
-                client.registrar_resultado(item["entrega_id"], item["status"])
+                client.registrar_resultado(
+                    item["entrega_id"],
+                    item["status"],
+                    external_id=item.get("external_id"),
+                )
                 confirmed += 1
             except AutomationApiError as exc:
                 remaining.append(item)

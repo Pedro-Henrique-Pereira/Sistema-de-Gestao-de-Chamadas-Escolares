@@ -18,18 +18,6 @@ router.put("/preferencias/maquina", auditarMutacao({
   detalhes: ({ req }) => ({ maquina: req.body.maquina || req.body.maquinaDestino }),
 }), pedagogaController.salvarMaquinaPadraoChamadas);
 router.get("/chamadas", pedagogaController.chamadasDoDia);
-router.post("/automacao-whatsapp/solicitar", auditarMutacao({
-  acao: "AUTOMACAO_ADMINISTRATIVA_EXECUTADA", entidade: "automacao",
-  entidadeId: ({ payload }) => payload.id || payload.tarefa.id,
-  descricao: "Solicitou a execução da automação de faltas por WhatsApp.",
-  detalhes: ({ req }) => ({ maquina: req.body.maquinaDestino || req.body.maquina }),
-}), pedagogaController.solicitarAutomacaoWhatsApp);
-router.get("/automacao-whatsapp/status/:id", pedagogaController.consultarStatusAutomacaoWhatsApp);
-router.get("/automacao-whatsapp/mensagem", pedagogaController.obterMensagemWhatsApp);
-router.put("/automacao-whatsapp/mensagem", auditarMutacao({
-  acao: "CONFIGURACAO_MENSAGEM_EDITADA", entidade: "configuracao", entidadeId: "mensagem_whatsapp",
-  descricao: "Atualizou o modelo de mensagem automática do WhatsApp.",
-}), pedagogaController.salvarMensagemWhatsApp);
 router.post("/chamadas/:id/confirmar", auditarMutacao({
   acao: "CHAMADA_CONFIRMADA", entidade: "chamada", entidadeId: ({ req }) => req.params.id,
   descricao: ({ req }) => `Confirmou a chamada ${req.params.id}.`,

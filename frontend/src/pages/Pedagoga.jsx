@@ -13,6 +13,14 @@ import {
 } from "lucide-react";
 import api from "../services/api";
 import { pedagogaService } from "../services/pedagogaService";
+import {
+  criarRequestId,
+  criarTarefaFaltas,
+  listarMaquinasAutomacao,
+  listarTarefasAutomacao,
+  obterModeloMensagemAutomacao,
+  salvarModeloMensagemAutomacao,
+} from "../services/automacaoService";
 import AutomacaoFeedbackModal from "../components/AutomacaoFeedbackModal";
 import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
 import TurmasDashboardCard from "../components/TurmasDashboardCard";
@@ -116,8 +124,11 @@ function Pedagoga() {
   const [mensagemWhatsappModalAberto, setMensagemWhatsappModalAberto] = useState(false);
   const [maquinaPadraoChamadas, setMaquinaPadraoChamadas] = useState("");
   const [maquinasPermitidasChamadas, setMaquinasPermitidasChamadas] = useState([1, 2]);
+  const [maquinasAutomacao, setMaquinasAutomacao] = useState([]);
+  const [tarefasAutomacaoRecentes, setTarefasAutomacaoRecentes] = useState([]);
   const [salvandoMaquinaPadrao, setSalvandoMaquinaPadrao] = useState(false);
   const [automacaoModal, setAutomacaoModal] = useState({ aberto: false, ids: [] });
+  const requestIdsFaltasRef = useRef({});
   const chamadasRefs = useRef({});
   const justificativasRefs = useRef({});
   const responsaveisRefs = useRef({});
@@ -234,8 +245,17 @@ function Pedagoga() {
   }
 
   async function carregarMensagemWhatsapp() {
-    const { data } = await pedagogaService.obterMensagemWhatsApp();
-    setMensagemWhatsappTexto(data.texto || "");
+    const data = await obterModeloMensagemAutomacao();
+    setMensagemWhatsappTexto(data.text || "");
+  }
+
+  async function carregarContextoAutomacao() {
+    const [dadosMaquinas, dadosTarefas] = await Promise.all([
+      listarMaquinasAutomacao(),
+      listarTarefasAutomacao({ type: "attendance_notification", limit: 10 }),
+    ]);
+    setMaquinasAutomacao((dadosMaquinas.machines || []).filter((machine) => [1, 2].includes(machine.machineNumber)));
+    setTarefasAutomacaoRecentes(dadosTarefas.tasks || []);
   }
 
   async function carregarPreferenciasPedagoga() {
@@ -272,6 +292,7 @@ function Pedagoga() {
         carregarDashboard(),
         carregarConfiguracaoAtraso(),
         carregarPreferenciasPedagoga(),
+        carregarContextoAutomacao(),
       ]);
 
       cacheRef.current.dashboardCarregado = true;
@@ -575,11 +596,7 @@ function Pedagoga() {
     try {
       setLoading(true);
       const { data } = await pedagogaService.confirmarChamada(chamada.id, montarPayloadConfirmacao(chamada));
-      const automacao = data?.automacao;
       setMensagem(data?.mensagem || "Registro confirmado com sucesso. A chamada já aparece na lista de chamadas confirmadas hoje.");
-      if (automacao?.id) {
-        setAutomacaoModal({ aberto: true, ids: [automacao.id] });
-      }
       setJustificativas({});
       setJustificativasAbertas({});
       await Promise.all([carregarDashboard(), carregarChamadas()]);
@@ -619,7 +636,7 @@ function Pedagoga() {
     return `${minutos}min ${String(restoSegundos).padStart(2, "0")}s`;
   }
 
-  async function iniciarAutomacaoChamadasSalvasHoje() {
+  async function iniciarAutomacaoChamada(chamada) {
     try {
       setLoading(true);
       const maquinaSelecionada = Number(maquinaPadraoChamadas);
@@ -628,14 +645,26 @@ function Pedagoga() {
         return;
       }
 
-      const { data } = await pedagogaService.solicitarAutomacaoWhatsApp({ maquinaDestino: maquinaSelecionada });
-      const idFila = data?.automacao?.id;
+      if (Number(chamada.total_ausentes || 0) <= 0) {
+        setMensagem("Esta chamada não possui alunos ausentes para notificar.");
+        return;
+      }
+
+      requestIdsFaltasRef.current[chamada.id] ||= criarRequestId(`attendance-${chamada.id}`);
+      const data = await criarTarefaFaltas({
+        requestId: requestIdsFaltasRef.current[chamada.id],
+        machineId: `machine-${maquinaSelecionada}`,
+        attendanceId: chamada.id,
+      });
+      const idFila = data?.task?.taskId;
 
       if (!idFila) {
         throw new Error("O backend não retornou o ID da solicitação de automação.");
       }
 
       setAutomacaoModal({ aberto: true, ids: [idFila] });
+      setMensagem(data.message || `Tarefa adicionada à fila da Máquina ${maquinaSelecionada}.`);
+      await carregarContextoAutomacao();
     } catch (error) {
       setMensagem(error.message);
     } finally {
@@ -646,8 +675,8 @@ function Pedagoga() {
   async function salvarMensagemWhatsapp() {
     try {
       setLoading(true);
-      const { data } = await pedagogaService.salvarMensagemWhatsApp(mensagemWhatsappTexto);
-      setMensagemWhatsappTexto(data.texto || mensagemWhatsappTexto);
+      const data = await salvarModeloMensagemAutomacao(mensagemWhatsappTexto);
+      setMensagemWhatsappTexto(data.text || mensagemWhatsappTexto);
       setMensagemWhatsappModalAberto(false);
       setMensagem("Mensagem padrão do WhatsApp salva com sucesso.");
       cacheRef.current.mensagemWhatsappCarregada = true;
@@ -1238,8 +1267,8 @@ function Pedagoga() {
             <div className={`content-card arrival-window-card ${automacaoLiberada ? "closed" : "open"}`} role="status">
               <strong>Horário máximo de chegada: {configAtraso.horarioLimiteAtraso}</strong>
               <p>{automacaoLiberada
-                ? "Prazo encerrado. Chamadas confirmadas estão bloqueadas e a automação foi liberada."
-                : `Revisões permanecem abertas até ${configAtraso.horarioLimiteAtraso}. Automação indisponível até esse horário.`}</p>
+                ? "Prazo encerrado. Chamadas confirmadas estão bloqueadas para revisão."
+                : `Revisões permanecem abertas até ${configAtraso.horarioLimiteAtraso}. Chamadas confirmadas com faltas já podem gerar tarefas.`}</p>
             </div>
 
             <div className="content-card machine-preference-card">
@@ -1258,6 +1287,12 @@ function Pedagoga() {
                     <option key={maquina} value={maquina}>Máquina {maquina}</option>
                   ))}
                 </select>
+                {maquinasAutomacao.find((item) => item.machineNumber === Number(maquinaPadraoChamadas)) && (
+                  <small>
+                    Estado: {maquinasAutomacao.find((item) => item.machineNumber === Number(maquinaPadraoChamadas)).state}
+                    {" · "}Fila: {maquinasAutomacao.find((item) => item.machineNumber === Number(maquinaPadraoChamadas)).queueDepth}
+                  </small>
+                )}
               </div>
             </div>
 
@@ -1277,15 +1312,6 @@ function Pedagoga() {
                   >
                     <Pencil size={17} />
                   </button>
-                  <button
-                    className="automation-button"
-                    type="button"
-                    onClick={iniciarAutomacaoChamadasSalvasHoje}
-                    disabled={loading || !automacaoLiberada || chamadasConfirmadas.length === 0}
-                    title={!automacaoLiberada ? "Automação indisponível até o Horário Máximo de Chegada." : "Registra uma solicitação pendente para o RPA Python processar"}
-                  >
-                    Executar automação
-                  </button>
                 </div>
               </div>
               {(chamadasConfirmadas || []).length === 0 ? <div className="empty-state">Nenhum registro encontrado</div> : <div className="class-list">
@@ -1304,6 +1330,17 @@ function Pedagoga() {
                         <span className="summary-justified">Justificadas: {chamada.total_justificados}</span><span className="summary-present">Atrasos: {chamada.total_atrasos || 0}</span>
                       </div>
                       <div className="confirmed-call-actions">
+                        <button
+                          className="automation-button"
+                          type="button"
+                          disabled={loading || Number(chamada.total_ausentes || 0) <= 0 || !maquinasPermitidasChamadas.includes(Number(maquinaPadraoChamadas))}
+                          onClick={() => iniciarAutomacaoChamada(chamada)}
+                          title={Number(chamada.total_ausentes || 0) <= 0
+                            ? "Esta chamada não possui alunos ausentes."
+                            : "Cria uma tarefa persistente para a máquina selecionada."}
+                        >
+                          Notificar responsáveis
+                        </button>
                         <button
                           className="confirmed-call-view-button"
                           type="button"
@@ -1349,6 +1386,35 @@ function Pedagoga() {
                   );
                 })}
               </div>}
+            </div>
+
+            <div className="content-card">
+              <div className="card-header saved-calls-header">
+                <div className="saved-calls-title">
+                  <h2>Tarefas recentes de notificação</h2>
+                  <p>O processamento continua mesmo após fechar esta página.</p>
+                </div>
+              </div>
+              {tarefasAutomacaoRecentes.length === 0 ? (
+                <div className="empty-state">Nenhuma tarefa recente.</div>
+              ) : (
+                <div className="class-list">
+                  {tarefasAutomacaoRecentes.map((task) => (
+                    <button
+                      key={task.taskId}
+                      className="class-item class-item-rich confirmed-call-card automation-history-button"
+                      type="button"
+                      onClick={() => setAutomacaoModal({ aberto: true, ids: [task.taskId] })}
+                    >
+                      <div>
+                        <strong>Tarefa #{task.taskId} · Máquina {task.machineNumber}</strong>
+                        <span>{task.processed}/{task.total} processados · {task.failureCount} falha(s)</span>
+                      </div>
+                      <span className="status-badge">{task.status}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
 

@@ -21,9 +21,11 @@ async function resetDatabase() {
     await connection.beginTransaction();
     await connection.query("SET FOREIGN_KEY_CHECKS = 0");
 
-    // Automação WhatsApp
+    // Automação de mensagens
+    await connection.query("DELETE FROM automacao_eventos");
+    await connection.query("DELETE FROM automacao_entregas");
+    await connection.query("UPDATE automacao_maquinas SET tarefa_atual_id = NULL, estado = 'offline', ultima_comunicacao_em = NULL, worker_id = NULL");
     await connection.query("DELETE FROM fila_automacao");
-    await connection.query("DELETE FROM controle_envios_diarios");
 
     // Dados operacionais
     await connection.query("DELETE FROM justificativas_frequencia");

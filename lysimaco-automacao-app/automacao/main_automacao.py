@@ -145,6 +145,10 @@ def processar_solicitacao(
         falhas = 0
         for indice, entrega in enumerate(solicitacao.entregas, start=1):
             try:
+                api_client.heartbeat(
+                    "online_busy",
+                    current_task_id=solicitacao_id,
+                )
                 destino_log = (
                     f"grupo técnico #{entrega.id}"
                     if entrega.canal == "grupo"
@@ -450,6 +454,13 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
             "API da automação autenticada para a máquina %s.",
             maquina_autenticada,
         )
+        heartbeat = api_client.heartbeat("online_available")
+        logger.info(
+            "Heartbeat registrado. estado=%s fila=%s versão=%s.",
+            heartbeat.get("machine", {}).get("state", "online_available"),
+            heartbeat.get("machine", {}).get("queueDepth", 0),
+            settings.app_version,
+        )
     except AutomationApiError as exc:
         if not exc.retryable:
             tratar_falha_global(exc)
@@ -487,6 +498,10 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
                 solicitacao = api_client.capturar_tarefa()
                 if solicitacao:
                     logger.info("Tarefa #%s capturada para a máquina %s.", solicitacao.id, settings.numero_maquina)
+                    api_client.heartbeat(
+                        "online_busy",
+                        current_task_id=solicitacao.id,
+                    )
                     if activity_callback is not None:
                         try:
                             activity_callback(f"Tarefa capturada #{solicitacao.id}")
@@ -556,6 +571,7 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
                     # Ele só será fechado no desligamento ou em caso de erro crítico.
                 else:
                     logger.info("Nenhuma tarefa elegível na API. Aguardando...")
+                    api_client.heartbeat("online_available")
 
                 if settings.run_once:
                     return 0
@@ -574,12 +590,26 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
                     exc.retryable,
                 )
                 if not exc.retryable:
+                    try:
+                        api_client.heartbeat(
+                            "online_error",
+                            last_error_code=codigo_erro_seguro(exc),
+                        )
+                    except Exception:
+                        pass
                     tratar_falha_global(exc)
                     return 1
                 if aguardar_com_parada(settings.api_retry_delay_seconds, stop_event):
                     return 0
             except Exception as exc:
                 tratar_falha_global(exc)
+                try:
+                    api_client.heartbeat(
+                        "online_error",
+                        last_error_code=codigo_erro_seguro(exc),
+                    )
+                except Exception:
+                    pass
                 if whatsapp is not None:
                     logger.info("Fechando navegador Selenium após erro.")
                     whatsapp.fechar()

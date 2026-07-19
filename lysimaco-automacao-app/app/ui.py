@@ -15,6 +15,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from automacao.main_automacao import run_from_gui
+from automacao.config.settings import settings
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,6 +35,15 @@ PERFIL_LABELS = {
     "pedagoga": "Pedagoga",
     "administracao": "Administrador",
 }
+
+def maquinas_configuradas_por_perfil(tipo):
+    permitidas = PERFIL_MAQUINAS.get(tipo, PERFIL_MAQUINAS["pedagoga"])
+    try:
+        configuradas = {str(machine_id) for machine_id in settings.available_machine_ids}
+    except RuntimeError:
+        return permitidas
+    filtradas = [machine_id for machine_id in permitidas if machine_id in configuradas]
+    return filtradas or permitidas
 
 DELAY_MINIMO_SEGURO = 5
 
@@ -218,7 +228,7 @@ class LysimacoAutomacaoApp(ctk.CTk):
         self.maquina_var = ctk.StringVar(value="1")
         self.maquina_select = ctk.CTkOptionMenu(
             card,
-            values=PERFIL_MAQUINAS["pedagoga"],
+            values=maquinas_configuradas_por_perfil("pedagoga"),
             variable=self.maquina_var,
             command=self.on_machine_changed,
         )
@@ -244,7 +254,7 @@ class LysimacoAutomacaoApp(ctk.CTk):
         self.intervalo_select.grid(row=5, column=0, padx=18, pady=(0, 8), sticky="ew")
         ctk.CTkLabel(
             card,
-            text="Tempo entre consultas no banco, em segundos.",
+            text="Tempo entre consultas na API, em segundos.",
             font=ctk.CTkFont(size=11),
             text_color="#64748b",
         ).grid(row=6, column=0, padx=18, pady=(0, 14), sticky="w")
@@ -382,7 +392,7 @@ class LysimacoAutomacaoApp(ctk.CTk):
 
         self.status_automacao = self.add_status_line(card, 1, "Automação", "Desligada")
         self.status_maquina = self.add_status_line(card, 2, "Máquina", "1")
-        self.status_banco = self.add_status_line(card, 3, "Banco", "Não testado")
+        self.status_banco = self.add_status_line(card, 3, "API", "Não testada")
         self.status_whatsapp = self.add_status_line(card, 4, "WhatsApp", "Aguardando")
         self.status_ultima_acao = self.add_status_line(card, 5, "Última ação", "Nenhuma")
 
@@ -480,7 +490,7 @@ class LysimacoAutomacaoApp(ctk.CTk):
     # ------------------------------------------------------------------
     def on_tipo_changed(self, value):
         tipo = value if value in PERFIL_MAQUINAS else "pedagoga"
-        opcoes_validas = PERFIL_MAQUINAS[tipo]
+        opcoes_validas = maquinas_configuradas_por_perfil(tipo)
         self.maquina_select.configure(values=opcoes_validas)
 
         if self.maquina_var.get() not in opcoes_validas:
@@ -494,7 +504,7 @@ class LysimacoAutomacaoApp(ctk.CTk):
     def on_machine_changed(self, value):
         maquina = str(value)
         tipo_atual = self.tipo_var.get()
-        maquinas_validas = PERFIL_MAQUINAS.get(tipo_atual, PERFIL_MAQUINAS["pedagoga"])
+        maquinas_validas = maquinas_configuradas_por_perfil(tipo_atual)
 
         if maquina not in maquinas_validas:
             self.maquina_var.set(maquinas_validas[0])
@@ -553,11 +563,12 @@ class LysimacoAutomacaoApp(ctk.CTk):
             tipo = "pedagoga"
 
         maquina = str(self.config_data.get("maquina_id", 1))
-        if maquina not in PERFIL_MAQUINAS[tipo]:
-            maquina = PERFIL_MAQUINAS[tipo][0]
+        maquinas_validas = maquinas_configuradas_por_perfil(tipo)
+        if maquina not in maquinas_validas:
+            maquina = maquinas_validas[0]
 
         self.tipo_var.set(tipo)
-        self.maquina_select.configure(values=PERFIL_MAQUINAS[tipo])
+        self.maquina_select.configure(values=maquinas_validas)
         self.maquina_var.set(maquina)
         self.intervalo_var.set(str(self.config_data.get("intervalo_verificacao", 15)))
         autostart_ativo = bool(self.config_data.get("iniciar_com_sistema", False)) and self.is_autostart_registered()
@@ -637,7 +648,7 @@ class LysimacoAutomacaoApp(ctk.CTk):
             self.tipo_var.set(tipo)
 
         maquina = self.maquina_var.get()
-        maquinas_validas = PERFIL_MAQUINAS[tipo]
+        maquinas_validas = maquinas_configuradas_por_perfil(tipo)
         if maquina not in maquinas_validas:
             maquina = maquinas_validas[0]
             self.maquina_var.set(maquina)
@@ -1016,7 +1027,7 @@ class LysimacoAutomacaoApp(ctk.CTk):
         self.watchdog_stop_event.set()
         self.running = False
         self.status_automacao.configure(text="Desligada")
-        self.status_banco.configure(text="Não testado")
+        self.status_banco.configure(text="Não testada")
         self.status_whatsapp.configure(text="Aguardando")
         self.status_ultima_acao.configure(text="Nenhuma")
         self.update_action_button()

@@ -35,7 +35,7 @@ const adminRoutes = require("./routes/admin.routes");
 const relatoriosRoutes = require("./routes/relatorios.routes");
 const configuracoesEscolaRoutes = require("./routes/configuracoes-escola.routes");
 const mensagensRoutes = require("./routes/mensagens.routes");
-const automacaoRoutes = require("./routes/automacao.routes");
+const automationRoutes = require("./routes/automation.routes");
 const automationWorkerRoutes = require("./routes/automation-worker.routes");
 const { csrfProtection } = require("./middlewares/csrfMiddleware");
 const { securityHeaders } = require("./middlewares/securityHeaders");
@@ -94,7 +94,7 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "X-CSRF-Token", "Authorization"],
+    allowedHeaders: ["Content-Type", "X-CSRF-Token", "Authorization", "X-Automation-Machine"],
     maxAge: 600,
   })
 );
@@ -115,7 +115,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/relatorios", relatoriosRoutes);
 app.use("/api/configuracoes-escola", configuracoesEscolaRoutes);
 app.use("/api/mensagens", mensagensRoutes);
-app.use("/api/automacao", automacaoRoutes);
+app.use("/api/automation", automationRoutes);
 
 
 app.get("/", (req, res) => {

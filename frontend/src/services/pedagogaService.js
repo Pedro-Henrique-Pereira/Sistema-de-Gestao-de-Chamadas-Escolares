@@ -11,10 +11,6 @@ export const pedagogaService = {
   criarChamadaPedagogica: (payload) => api.post("/api/pedagoga/chamadas-pedagogicas", payload),
   atualizarChamadaTemporaria: (id, payload) => api.put(`/api/pedagoga/chamadas/${id}`, payload),
   marcarAlunoAtrasado: (chamadaId, alunoId, versao) => api.patch(`/api/chamadas/${chamadaId}/atraso`, { aluno_id: alunoId, versao }),
-  solicitarAutomacaoWhatsApp: (payload = {}) => api.post("/api/pedagoga/automacao-whatsapp/solicitar", payload),
-  consultarStatusAutomacaoWhatsApp: (id) => api.get(`/api/pedagoga/automacao-whatsapp/status/${id}`),
-  obterMensagemWhatsApp: () => api.get("/api/pedagoga/automacao-whatsapp/mensagem"),
-  salvarMensagemWhatsApp: (texto) => api.put("/api/pedagoga/automacao-whatsapp/mensagem", { texto }),
   obterPreferencias: () => api.get("/api/pedagoga/preferencias"),
   salvarMaquinaPadraoChamadas: (maquinaPadraoChamadas) => api.put("/api/pedagoga/preferencias/maquina", { maquinaPadraoChamadas }),
 };

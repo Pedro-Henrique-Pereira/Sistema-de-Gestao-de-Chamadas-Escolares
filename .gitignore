@@ -51,6 +51,7 @@ yarn-error.log*
 !backend/src/database/migrations/2026-07-18_bloqueio_edicao_chamadas.sql
 !backend/src/database/migrations/2026-07-19_logs_auditoria.sql
 !backend/src/database/migrations/2026-07-19_automacao_api.sql
+!backend/src/database/migrations/2026-07-20_automacao_tarefas_v2.sql
 *.sqlite
 *.db
 *.dump

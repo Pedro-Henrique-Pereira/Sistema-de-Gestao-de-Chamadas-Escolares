@@ -1,17 +1,17 @@
 const crypto = require("crypto");
 
-function carregarTokensServico(valor = process.env.AUTOMATION_SERVICE_TOKENS) {
+function carregarTokensServico(valor = process.env.AUTOMATION_MACHINE_TOKENS) {
   if (!valor) return new Map();
 
   let parsed;
   try {
     parsed = JSON.parse(valor);
   } catch {
-    throw new Error("AUTOMATION_SERVICE_TOKENS deve ser um objeto JSON válido.");
+    throw new Error("AUTOMATION_MACHINE_TOKENS deve ser um objeto JSON válido.");
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("AUTOMATION_SERVICE_TOKENS deve mapear máquinas para tokens.");
+    throw new Error("AUTOMATION_MACHINE_TOKENS deve mapear máquinas para tokens.");
   }
 
   const tokens = new Map();
@@ -19,12 +19,16 @@ function carregarTokensServico(valor = process.env.AUTOMATION_SERVICE_TOKENS) {
     const maquinaId = Number(maquinaRaw);
     const token = String(tokenRaw || "");
     if (!Number.isInteger(maquinaId) || maquinaId < 1 || maquinaId > 5) {
-      throw new Error("AUTOMATION_SERVICE_TOKENS contém uma máquina inválida.");
+      throw new Error("AUTOMATION_MACHINE_TOKENS contém uma máquina inválida.");
     }
     if (token.length < 32) {
       throw new Error(`Token da máquina ${maquinaId} deve possuir pelo menos 32 caracteres.`);
     }
     tokens.set(maquinaId, token);
+  }
+
+  if (new Set(tokens.values()).size !== tokens.size) {
+    throw new Error("Cada máquina deve possuir uma credencial exclusiva.");
   }
   return tokens;
 }
@@ -67,14 +71,14 @@ function autenticarAutomationWorker(req, res, next) {
   }
 
   const recebido = extrairBearer(req);
-  const maquinasAutorizadas = [];
+  let maquinaCredencial = null;
   for (const [maquina, esperado] of tokens.entries()) {
     if (tokensIguais(recebido, esperado)) {
-      maquinasAutorizadas.push(maquina);
+      maquinaCredencial = maquina;
     }
   }
 
-  if (!maquinasAutorizadas.length) {
+  if (!maquinaCredencial) {
     return res.status(401).json({ erro: "Credencial da automação inválida." });
   }
 
@@ -85,21 +89,15 @@ function autenticarAutomationWorker(req, res, next) {
 
   if (
     maquinaSolicitada !== null
-    && !maquinasAutorizadas.includes(maquinaSolicitada)
+    && maquinaSolicitada !== maquinaCredencial
   ) {
     return res.status(403).json({ erro: "Credencial não autorizada para a máquina solicitada." });
   }
 
-  if (maquinaSolicitada === null && maquinasAutorizadas.length > 1) {
-    return res.status(400).json({
-      erro: "Informe a máquina selecionada no cabeçalho X-Automation-Machine.",
-    });
-  }
-
-  const maquinaId = maquinaSolicitada ?? maquinasAutorizadas[0];
+  const maquinaId = maquinaSolicitada ?? maquinaCredencial;
   req.automationWorker = {
     maquinaId,
-    maquinasAutorizadas,
+    identidade: `machine-${maquinaId}`,
   };
   return next();
 }

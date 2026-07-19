@@ -7,8 +7,8 @@ const {
 } = require("../utils/authCookies");
 const {
   serializarUsuarioPublico,
-  serializarStatusAutomacao,
 } = require("../utils/publicDtos");
+const { publicErrorMessage } = require("../services/automationDomain");
 const { requisicaoVeioDeLocalhost } = require("../utils/devAccess");
 const { tokensCoincidem } = require("../middlewares/csrfMiddleware");
 const { securityHeaders } = require("../middlewares/securityHeaders");
@@ -47,18 +47,10 @@ test("DTO publico de usuario nunca inclui hash, senha ou token", () => {
   assert.deepEqual(Object.keys(dto).sort(), ["email", "id", "nome", "tipo"]);
 });
 
-test("DTO de automacao remove metadados internos e erro bruto", () => {
-  const dto = serializarStatusAutomacao({
-    id: 9,
-    status: "erro",
-    erro: "stack e caminho interno",
-    lock_owner: "maquina-interna",
-    usuario_solicitante_nome: "Nome pessoal",
-    payload: { segredo: true },
-  });
-
-  assert.deepEqual(Object.keys(dto).sort(), ["erro_publico", "id", "status"]);
-  assert.equal(dto.erro_publico.includes("stack"), false);
+test("erro público da automação nunca repassa erro bruto", () => {
+  const mensagem = publicErrorMessage("stack e caminho interno");
+  assert.equal(mensagem.includes("stack"), false);
+  assert.match(mensagem, /envio/i);
 });
 
 test("login rapido exige conexao de loopback real", () => {

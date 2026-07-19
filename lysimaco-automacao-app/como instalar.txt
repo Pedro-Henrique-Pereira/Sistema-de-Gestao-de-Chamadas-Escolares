@@ -1,13 +1,14 @@
-1. Instale Python 3.11 ou superior.
+1. Instale Python 3.11 ou 3.12.
 2. Copie .env.example para .env.
-3. Configure API_BASE_URL, AUTOMATION_API_TOKEN, AUTOMATION_WORKER_ID e o NUMERO_MAQUINA inicial.
-4. No backend, repita o token em cada máquina que poderá ser selecionada na interface
-   de AUTOMATION_SERVICE_TOKENS e execute:
+3. Configure API_BASE_URL, AUTOMATION_MACHINE_TOKENS, AUTOMATION_WORKER_ID e NUMERO_MAQUINA.
+4. No backend, configure os mesmos tokens exclusivos por máquina em
+   AUTOMATION_MACHINE_TOKENS e execute:
    npm run migrate:automation-api
 5. No diretório do aplicativo, execute:
-   python -m venv .venv
+   py -3.12 -m venv .venv
    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
    .\.venv\Scripts\python.exe main.py
 
-O backend e o aplicativo podem rodar em computadores diferentes. Não configure credenciais do MySQL no aplicativo.
-Depois da instalação, o número da máquina pode ser alterado e salvo diretamente no aplicativo.
+O backend e o aplicativo podem rodar em computadores diferentes. Não configure
+credenciais do MySQL no aplicativo. O número da máquina pode ser alterado e
+salvo diretamente no painel antes de ligar a automação.

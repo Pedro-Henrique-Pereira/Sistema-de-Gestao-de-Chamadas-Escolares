@@ -132,9 +132,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 DELETE FROM sessoes_ativas
 WHERE expira_em <= NOW();
 
--- 10. Controle diario de mensagens: preserva somente o dia atual.
-DELETE FROM controle_envios_diarios
-WHERE data_envio < CURDATE();
+-- 10. A tabela legada controle_envios_diarios foi removida pela API V2.
 
 -- 11. Chamadas pendentes/canceladas antigas: preserva chamadas confirmadas ja migradas para historico.
 DELETE FROM chamadas_diarias
@@ -143,15 +141,10 @@ WHERE data_chamada < CURDATE()
 
 -- 12. Fila de automacao finalizada antiga: dado operacional.
 DELETE FROM fila_automacao
-WHERE status IN ('concluido', 'erro', 'expirado', 'cancelado')
-  AND data_solicitacao < DATE_SUB(NOW(), INTERVAL 30 DAY);
+WHERE status IN ('concluido', 'concluido_parcial', 'erro', 'falha_comunicacao', 'expirado', 'cancelado')
+  AND data_solicitacao < DATE_SUB(NOW(), INTERVAL 365 DAY);
 
--- 13. Expira tarefas pendentes antigas sem apagar imediatamente.
-UPDATE fila_automacao
-SET status = 'expirado',
-    erro = COALESCE(erro, 'Tarefa expirada automaticamente por ficar pendente por mais de 7 dias.')
-WHERE status = 'pendente'
-  AND data_solicitacao < DATE_SUB(NOW(), INTERVAL 7 DAY);
+-- 13. Tarefas pendentes não são expiradas automaticamente na API V2.
 
 -- 14. Libera locks travados.
 UPDATE fila_automacao

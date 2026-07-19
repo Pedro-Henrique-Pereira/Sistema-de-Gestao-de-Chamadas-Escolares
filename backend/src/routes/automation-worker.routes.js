@@ -16,6 +16,7 @@ router.use(rateLimit({
 }));
 
 router.get("/health", controller.health);
+router.post("/heartbeat", controller.heartbeat);
 router.post("/tasks/claim", controller.capturarTarefa);
 router.post("/deliveries/:id/result", controller.registrarResultado);
 

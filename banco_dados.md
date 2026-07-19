@@ -424,21 +424,6 @@ VALUES (
 ON DUPLICATE KEY UPDATE
   texto = texto;
 
-CREATE TABLE IF NOT EXISTS controle_envios_diarios (
-  aluno_id INT NOT NULL,
-  data_envio DATE NOT NULL,
-  status ENUM('pendente', 'enviado', 'erro') NOT NULL DEFAULT 'pendente',
-  criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (aluno_id, data_envio),
-  KEY idx_controle_data_status (data_envio, status),
-  CONSTRAINT fk_controle_envios_aluno
-    FOREIGN KEY (aluno_id)
-    REFERENCES alunos(id)
-    ON DELETE CASCADE
-    ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 CREATE TABLE IF NOT EXISTS grupos_whatsapp (
   id INT AUTO_INCREMENT PRIMARY KEY,
   nome_grupo VARCHAR(150) NOT NULL,
@@ -451,17 +436,23 @@ CREATE TABLE IF NOT EXISTS grupos_whatsapp (
 
 CREATE TABLE IF NOT EXISTS fila_automacao (
   id INT AUTO_INCREMENT PRIMARY KEY,
+  request_id VARCHAR(64) NOT NULL,
+  chave_idempotencia VARCHAR(160) NOT NULL,
   usuario_solicitante_id INT NULL,
   usuario_solicitante_nome VARCHAR(100) NULL,
   maquina_destino TINYINT NOT NULL,
   tipo_automacao ENUM('faltas', 'mensagem_grupo') NOT NULL DEFAULT 'faltas',
+  registro_chamada_id INT NULL,
   mensagem TEXT NULL,
   payload JSON NULL,
+  versao_api SMALLINT UNSIGNED NOT NULL DEFAULT 2,
   status ENUM(
     'pendente',
     'executando',
     'concluido',
+    'concluido_parcial',
     'erro',
+    'falha_comunicacao',
     'expirado',
     'cancelado'
   ) NOT NULL DEFAULT 'pendente',
@@ -471,7 +462,16 @@ CREATE TABLE IF NOT EXISTS fila_automacao (
   iniciado_em DATETIME NULL,
   concluido_em DATETIME NULL,
   tentativas INT NOT NULL DEFAULT 0,
+  total_destinatarios INT UNSIGNED NOT NULL DEFAULT 0,
+  total_sucessos INT UNSIGNED NOT NULL DEFAULT 0,
+  total_falhas INT UNSIGNED NOT NULL DEFAULT 0,
+  identificador_externo VARCHAR(100) NULL,
   erro TEXT NULL,
+  atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_fila_automacao_request_id (request_id),
+  UNIQUE KEY uk_fila_automacao_idempotencia (chave_idempotencia),
+  KEY idx_fila_maquina_fifo (maquina_destino, status, data_solicitacao, id),
+  KEY idx_fila_registro_chamada (registro_chamada_id, tipo_automacao),
   KEY idx_fila_automacao_status_data (status, data_solicitacao),
   KEY idx_fila_captura_segura (status, maquina_destino, data_solicitacao),
   KEY idx_fila_tipo_status_maquina (tipo_automacao, status, maquina_destino, data_solicitacao),
@@ -481,6 +481,11 @@ CREATE TABLE IF NOT EXISTS fila_automacao (
   CONSTRAINT fk_fila_usuario_solicitante
     FOREIGN KEY (usuario_solicitante_id)
     REFERENCES usuarios(id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_fila_registro_chamada
+    FOREIGN KEY (registro_chamada_id)
+    REFERENCES registros_chamadas_confirmadas(id)
     ON DELETE SET NULL
     ON UPDATE CASCADE,
   CONSTRAINT chk_fila_maquina_destino
@@ -494,17 +499,26 @@ CREATE TABLE IF NOT EXISTS automacao_entregas (
   fila_automacao_id INT NOT NULL,
   chave_idempotencia VARCHAR(100) NOT NULL,
   tipo_destino ENUM('responsavel', 'grupo') NOT NULL,
+  destinatario_nome VARCHAR(150) NULL,
   aluno_id INT NULL,
+  aluno_nome VARCHAR(150) NULL,
   frequencia_aluno_id INT NULL,
   responsavel_id INT NULL,
   grupo_whatsapp_id INT NULL,
+  grupo_nome VARCHAR(150) NULL,
   data_referencia DATE NULL,
+  telefone_destino VARCHAR(20) NULL,
+  telefone_mascarado VARCHAR(24) NULL,
+  mensagem TEXT NULL,
   status ENUM('pendente', 'processando', 'enviado', 'erro', 'cancelado', 'ignorado')
     NOT NULL DEFAULT 'pendente',
+  retentavel BOOLEAN NOT NULL DEFAULT TRUE,
   tentativas TINYINT UNSIGNED NOT NULL DEFAULT 0,
   lock_owner VARCHAR(100) NULL,
   lock_adquirido_em DATETIME NULL,
   erro_codigo VARCHAR(80) NULL,
+  erro_mensagem VARCHAR(255) NULL,
+  identificador_externo VARCHAR(100) NULL,
   criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   iniciado_em DATETIME NULL,
   concluido_em DATETIME NULL,
@@ -531,17 +545,48 @@ CREATE TABLE IF NOT EXISTS automacao_entregas (
   CONSTRAINT chk_automacao_entregas_tentativas CHECK (tentativas <= 5)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS automacao_maquinas (
+  maquina_id TINYINT NOT NULL PRIMARY KEY,
+  identidade VARCHAR(30) NOT NULL,
+  nome_exibicao VARCHAR(60) NOT NULL,
+  habilitada BOOLEAN NOT NULL DEFAULT TRUE,
+  estado ENUM('online_available', 'online_busy', 'online_error', 'offline', 'updating', 'disabled')
+    NOT NULL DEFAULT 'offline',
+  ultima_comunicacao_em DATETIME NULL,
+  versao_aplicativo VARCHAR(30) NULL,
+  versao_minima VARCHAR(30) NOT NULL DEFAULT '2.0.0',
+  tarefa_atual_id INT NULL,
+  worker_id VARCHAR(80) NULL,
+  ultimo_erro_codigo VARCHAR(80) NULL,
+  atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_automacao_maquinas_identidade (identidade),
+  KEY idx_automacao_maquinas_estado_heartbeat (estado, ultima_comunicacao_em),
+  CONSTRAINT fk_automacao_maquinas_tarefa_atual
+    FOREIGN KEY (tarefa_atual_id) REFERENCES fila_automacao(id)
+    ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS automacao_eventos (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  fila_automacao_id INT NOT NULL,
+  automacao_entrega_id BIGINT NULL,
+  evento_tipo VARCHAR(60) NOT NULL,
+  status VARCHAR(40) NULL,
+  erro_codigo VARCHAR(80) NULL,
+  criado_em DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY idx_automacao_eventos_tarefa_data (fila_automacao_id, criado_em, id),
+  KEY idx_automacao_eventos_entrega_data (automacao_entrega_id, criado_em, id),
+  CONSTRAINT fk_automacao_eventos_tarefa
+    FOREIGN KEY (fila_automacao_id) REFERENCES fila_automacao(id)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT fk_automacao_eventos_entrega
+    FOREIGN KEY (automacao_entrega_id) REFERENCES automacao_entregas(id)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 DELETE FROM sessoes_ativas WHERE expira_em <= NOW();
-
-DELETE FROM controle_envios_diarios WHERE data_envio < CURDATE();
-
-UPDATE fila_automacao
-   SET status = 'expirado',
-       erro = COALESCE(erro, 'Tarefa expirada automaticamente por ficar pendente por mais de 7 dias.')
- WHERE status = 'pendente'
-   AND data_solicitacao < DATE_SUB(NOW(), INTERVAL 7 DAY);
 
 UPDATE fila_automacao
    SET status = 'pendente',
@@ -656,10 +701,6 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 DELETE FROM sessoes_ativas
 WHERE expira_em <= NOW();
 
--- 10. Controle diario de mensagens: preserva somente o dia atual.
-DELETE FROM controle_envios_diarios
-WHERE data_envio < CURDATE();
-
 -- 11. Chamadas pendentes/canceladas antigas: preserva chamadas confirmadas ja migradas para historico.
 DELETE FROM chamadas_diarias
 WHERE data_chamada < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
@@ -670,14 +711,7 @@ DELETE FROM fila_automacao
 WHERE status IN ('concluido', 'erro', 'expirado', 'cancelado')
   AND data_solicitacao < DATE_SUB(NOW(), INTERVAL 30 DAY);
 
--- 13. Expira tarefas pendentes antigas sem apagar imediatamente.
-UPDATE fila_automacao
-SET status = 'expirado',
-    erro = COALESCE(erro, 'Tarefa expirada automaticamente por ficar pendente por mais de 7 dias.')
-WHERE status = 'pendente'
-  AND data_solicitacao < DATE_SUB(NOW(), INTERVAL 7 DAY);
-
--- 14. Libera locks travados.
+-- 14. Libera locks travados sem apagar tarefas pendentes.
 UPDATE fila_automacao
 SET status = 'pendente',
     lock_owner = NULL,

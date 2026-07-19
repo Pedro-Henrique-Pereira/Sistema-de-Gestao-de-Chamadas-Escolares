@@ -49,16 +49,24 @@ O aplicativo agora recebe somente os dados necessários para operar o WhatsApp e
 ## 5. Endpoints
 
 - `GET /api/automation-worker/health`
+- `POST /api/automation-worker/heartbeat`
 - `POST /api/automation-worker/tasks/claim`
 - `POST /api/automation-worker/deliveries/:id/result`
 
-As rotas web existentes de professores, pedagogas e administradores não foram alteradas.
+As rotas web antigas foram substituídas por `/api/automation/tasks`,
+`/api/automation/machines` e `/api/automation/queues`.
 
 ## 6. Autenticação
 
-O backend recebe um mapa `AUTOMATION_SERVICE_TOKENS` no qual cada token autoriza uma ou mais máquinas. A comparação usa `crypto.timingSafeEqual`; a máquina escolhida na interface é enviada em `X-Automation-Machine` e precisa pertencer ao conjunto autorizado.
+O backend recebe `AUTOMATION_MACHINE_TOKENS`, com uma credencial exclusiva por
+máquina. A comparação usa `crypto.timingSafeEqual`; a máquina escolhida na
+interface é enviada em `X-Automation-Machine` e deve corresponder exatamente à
+credencial.
 
-O aplicativo usa `API_BASE_URL`, `AUTOMATION_API_TOKEN`, `AUTOMATION_WORKER_ID` e `NUMERO_MAQUINA`. Ele recusa token menor que 32 caracteres, URL remota sem HTTPS e seleção de máquina não autorizada pelo token.
+O aplicativo usa `API_BASE_URL`, `AUTOMATION_MACHINE_TOKENS`,
+`AUTOMATION_APP_VERSION`, `AUTOMATION_WORKER_ID` e `NUMERO_MAQUINA`. Ele recusa
+tokens menores que 32 caracteres, credenciais repetidas, URL remota sem HTTPS e
+seleção de máquina sem credencial.
 
 Não são usados cookies, JWT pessoal, sessão de usuário ou bypass de autenticação.
 

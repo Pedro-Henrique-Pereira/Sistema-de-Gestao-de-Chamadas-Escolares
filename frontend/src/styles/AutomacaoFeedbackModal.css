@@ -104,3 +104,61 @@
   color: #f9fafb;
   font-size: 0.82rem;
 }
+
+.automation-task-progress {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8fafc;
+  text-align: left;
+}
+
+.automation-task-progress strong {
+  grid-column: 1 / -1;
+}
+
+.automation-failure-list {
+  width: 100%;
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  text-align: left;
+}
+
+.automation-failure-item {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fff7f7;
+}
+
+.automation-modal-actions {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.automation-history-button {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (max-width: 520px) {
+  .automation-task-progress {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-task-progress strong {
+    grid-column: auto;
+  }
+}
