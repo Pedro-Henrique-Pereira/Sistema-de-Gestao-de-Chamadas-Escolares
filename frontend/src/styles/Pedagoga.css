@@ -1619,6 +1619,23 @@ button:focus-visible {
   background: #ffffff;
 }
 
+.whatsapp-message-textarea:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.whatsapp-message-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
 @media (max-width: 620px) {
   .automation-actions {
     width: 100%;

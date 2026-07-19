@@ -27,6 +27,15 @@ test("pedagoga cria uma tarefa por chamada confirmada nas máquinas 1 ou 2", () 
   assert.match(pedagoga, /delete requestIdsFaltasRef\.current\[chamada\.id\]/);
 });
 
+test("editor da mensagem informa o salvamento e mantém falhas visíveis no modal", () => {
+  assert.match(pedagoga, /salvandoMensagemWhatsapp/);
+  assert.match(pedagoga, /erroMensagemWhatsapp/);
+  assert.match(pedagoga, /Salvando\.\.\./);
+  assert.match(pedagoga, /role="alert"/);
+  assert.match(pedagoga, /type="submit"/);
+  assert.match(pedagoga, /dia\/mês\/ano/);
+});
+
 test("administrador cria uma tarefa deduplicável para grupos nas máquinas 3, 4 ou 5", () => {
   assert.match(admin, /const MAQUINAS = \[3, 4, 5\]/);
   assert.match(admin, /requestIdPendente\.current/);

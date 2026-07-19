@@ -123,6 +123,8 @@ function Pedagoga() {
   const [automacaoLiberada, setAutomacaoLiberada] = useState(false);
   const [mensagemWhatsappTexto, setMensagemWhatsappTexto] = useState("");
   const [mensagemWhatsappModalAberto, setMensagemWhatsappModalAberto] = useState(false);
+  const [salvandoMensagemWhatsapp, setSalvandoMensagemWhatsapp] = useState(false);
+  const [erroMensagemWhatsapp, setErroMensagemWhatsapp] = useState("");
   const [maquinaPadraoChamadas, setMaquinaPadraoChamadas] = useState("");
   const [maquinasPermitidasChamadas, setMaquinasPermitidasChamadas] = useState([1, 2]);
   const [maquinasAutomacao, setMaquinasAutomacao] = useState([]);
@@ -702,17 +704,21 @@ function Pedagoga() {
   }
 
   async function salvarMensagemWhatsapp() {
+    if (salvandoMensagemWhatsapp) return;
+
     try {
-      setLoading(true);
-      const data = await salvarModeloMensagemAutomacao(mensagemWhatsappTexto);
-      setMensagemWhatsappTexto(data.text || mensagemWhatsappTexto);
+      setSalvandoMensagemWhatsapp(true);
+      setErroMensagemWhatsapp("");
+      const texto = mensagemWhatsappTexto.trim();
+      const data = await salvarModeloMensagemAutomacao(texto);
+      setMensagemWhatsappTexto(data.text || texto);
       setMensagemWhatsappModalAberto(false);
       setMensagem("Mensagem padrão do WhatsApp salva com sucesso.");
       cacheRef.current.mensagemWhatsappCarregada = true;
     } catch (error) {
-      setMensagem(error.message);
+      setErroMensagemWhatsapp(error.message || "Não foi possível salvar a mensagem. Tente novamente.");
     } finally {
-      setLoading(false);
+      setSalvandoMensagemWhatsapp(false);
     }
   }
 
@@ -1343,7 +1349,10 @@ function Pedagoga() {
                   <button
                     className="automation-edit-button"
                     type="button"
-                    onClick={() => setMensagemWhatsappModalAberto(true)}
+                    onClick={() => {
+                      setErroMensagemWhatsapp("");
+                      setMensagemWhatsappModalAberto(true);
+                    }}
                     title="Editar mensagem enviada aos responsáveis"
                     aria-label="Editar mensagem enviada aos responsáveis"
                   >
@@ -1457,24 +1466,47 @@ function Pedagoga() {
 
             {mensagemWhatsappModalAberto && (
               <div className="modal-backdrop">
-                <div className="content-card edit-form modal-card whatsapp-message-modal">
+                <form
+                  className="content-card edit-form modal-card whatsapp-message-modal"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    salvarMensagemWhatsapp();
+                  }}
+                  aria-busy={salvandoMensagemWhatsapp}
+                >
                   <div className="card-header">
                     <h2>Mensagem do WhatsApp</h2>
-                    <p>Use as tags dinâmicas <strong>{"{nome_responsavel}"}</strong>, <strong>{"{nome_aluno}"}</strong> e <strong>{"{data}"}</strong>. O robô local substituirá esses campos antes do envio.</p>
+                    <p>Use as tags dinâmicas <strong>{"{nome_responsavel}"}</strong>, <strong>{"{nome_aluno}"}</strong> e <strong>{"{data}"}</strong>. A data será enviada no formato dia/mês/ano.</p>
                   </div>
                   <textarea
                     className="whatsapp-message-textarea"
                     value={mensagemWhatsappTexto}
-                    onChange={(e) => setMensagemWhatsappTexto(e.target.value)}
+                    onChange={(e) => {
+                      setMensagemWhatsappTexto(e.target.value);
+                      if (erroMensagemWhatsapp) setErroMensagemWhatsapp("");
+                    }}
                     maxLength={1000}
                     rows={8}
+                    disabled={salvandoMensagemWhatsapp}
                   />
                   <small>{mensagemWhatsappTexto.length}/1000 caracteres</small>
+                  {erroMensagemWhatsapp && (
+                    <p className="whatsapp-message-error" role="alert">{erroMensagemWhatsapp}</p>
+                  )}
                   <div className="action-row">
-                    <button className="btn-primary" type="button" onClick={salvarMensagemWhatsapp} disabled={loading || !mensagemWhatsappTexto.trim()}>Salvar mensagem</button>
-                    <button className="btn-secondary" type="button" onClick={() => setMensagemWhatsappModalAberto(false)}>Cancelar</button>
+                    <button className="btn-primary" type="submit" disabled={salvandoMensagemWhatsapp || !mensagemWhatsappTexto.trim()}>
+                      {salvandoMensagemWhatsapp ? "Salvando..." : "Salvar mensagem"}
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      type="button"
+                      onClick={() => setMensagemWhatsappModalAberto(false)}
+                      disabled={salvandoMensagemWhatsapp}
+                    >
+                      Cancelar
+                    </button>
                   </div>
-                </div>
+                </form>
               </div>
             )}
 

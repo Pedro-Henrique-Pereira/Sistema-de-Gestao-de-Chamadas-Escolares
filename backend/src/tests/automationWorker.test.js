@@ -13,6 +13,7 @@ const {
   ATTENDANCE_MACHINES,
   GROUP_MACHINES,
   assertMachineAllowed,
+  formatDateBR,
   normalizePhone,
   publicTaskStatus,
   renderAttendanceMessage,
@@ -61,6 +62,13 @@ test("worker, telefone e mensagem personalizada são validados", () => {
   );
   assert.match(ensurePersonalizedTemplate("Entre em contato com a escola."), /\{nome_aluno\}/);
   assert.match(ensurePersonalizedTemplate("Entre em contato com a escola."), /\{nome_responsavel\}/);
+});
+
+test("data da ausência é sempre apresentada no formato dia/mês/ano", () => {
+  assert.equal(formatDateBR("2026-07-19"), "19/07/2026");
+  assert.equal(formatDateBR("2026-07-19T12:30:00.000Z"), "19/07/2026");
+  assert.equal(formatDateBR(new Date(2026, 6, 19, 12, 0, 0)), "19/07/2026");
+  assert.equal(formatDateBR("19/07/2026"), "19/07/2026");
 });
 
 test("permissões de máquina e estados públicos seguem o contrato V2", () => {

@@ -82,11 +82,27 @@ function maskPhone(value) {
   return `${digits.slice(0, 2)}*******${digits.slice(-2)}`;
 }
 
+function formatDateBR(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const day = String(value.getDate()).padStart(2, "0");
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    return `${day}/${month}/${value.getFullYear()}`;
+  }
+
+  const text = String(value || "").trim();
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(text)) return text;
+
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/.exec(text);
+  if (isoDate) return `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`;
+
+  return text;
+}
+
 function renderAttendanceMessage(template, data) {
   return String(template || "")
     .replaceAll("{nome_responsavel}", String(data.guardianName || "").trim())
     .replaceAll("{nome_aluno}", String(data.studentName || "").trim())
-    .replaceAll("{data}", String(data.absenceDate || "").split("-").reverse().join("/"))
+    .replaceAll("{data}", formatDateBR(data.absenceDate))
     .trim();
 }
 
@@ -145,6 +161,7 @@ module.exports = {
   PUBLIC_ERROR_MESSAGES,
   assertMachineAllowed,
   compareVersions,
+  formatDateBR,
   hashPayload,
   hashText,
   httpError,
