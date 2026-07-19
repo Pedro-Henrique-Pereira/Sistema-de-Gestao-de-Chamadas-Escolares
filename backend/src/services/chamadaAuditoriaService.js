@@ -1,6 +1,8 @@
+const { sanitizarDetalhes } = require("../utils/auditoriaSanitizer");
+
 function serializar(valor) {
   if (valor === undefined) return null;
-  return JSON.stringify(valor);
+  return JSON.stringify(sanitizarDetalhes(valor));
 }
 
 async function registrarAuditoria(connection, {

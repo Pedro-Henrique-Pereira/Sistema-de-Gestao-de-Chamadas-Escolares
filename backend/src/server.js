@@ -41,6 +41,7 @@ const { securityHeaders } = require("./middlewares/securityHeaders");
 const { errorMiddleware, notFoundMiddleware } = require("./utils/errorHandler");
 const { iniciarRotinaLimpezaDiaria } = require("./services/limpezaDadosService");
 const { iniciarRotinaLimpezaAutomacao } = require("./services/limpezaAutomacaoService");
+const { iniciarRotinaLimpezaAuditoria } = require("./services/limpezaAuditoriaService");
 
 const app = express();
 app.disable("x-powered-by");
@@ -132,5 +133,9 @@ app.listen(PORT, HOST, () => {
 
   if (process.env.DISABLE_AUTOMACAO_CLEANUP !== "true") {
     iniciarRotinaLimpezaAutomacao();
+  }
+
+  if (process.env.DISABLE_AUDIT_CLEANUP !== "true") {
+    iniciarRotinaLimpezaAuditoria();
   }
 });

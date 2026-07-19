@@ -4,6 +4,7 @@ import { apiFetch } from "../services/api";
 import { buscarConfiguracaoEscola, salvarConfiguracaoEscola } from "../services/configuracoesEscolaService";
 import RelatoriosAvancados from "./RelatoriosAvancados";
 import MensagensAdmin from "./MensagensAdmin";
+import LogsAuditoria from "./LogsAuditoria";
 import AlunosAtrasadosCard from "../components/AlunosAtrasadosCard";
 import MetricProgressChart from "../components/MetricProgressChart";
 import TurmasDashboardCard from "../components/TurmasDashboardCard";
@@ -923,6 +924,13 @@ async function handleRemoverEquipe(idPessoa) {
 
 
           <button
+            className={telaAtiva === "auditoria" ? "active" : ""}
+            onClick={() => trocarTela("auditoria")}
+          >
+            Logs de Auditoria
+          </button>
+
+          <button
             className={telaAtiva === "configuracoes" ? "active" : ""}
             onClick={() => trocarTela("configuracoes")}
           >
@@ -1669,6 +1677,10 @@ async function handleRemoverEquipe(idPessoa) {
 
         {telaAtiva === "mensagens" && (
           <MensagensAdmin />
+        )}
+
+        {telaAtiva === "auditoria" && (
+          <LogsAuditoria />
         )}
 
         {modalAluno && (

@@ -40,7 +40,8 @@ test("somente administração passa pela autorização da rota de alteração", 
   assert.equal(executarAutorizacao("professor").statusCode, 403);
 
   const rota = fs.readFileSync(path.resolve(__dirname, "../routes/configuracoes-escola.routes.js"), "utf8");
-  assert.match(rota, /router\.put\("\/", autorizar\("administracao"\), controller\.salvarConfiguracao\)/);
+  assert.match(rota, /router\.put\("\/", autorizar\("administracao"\), auditarMutacao\(/);
+  assert.match(rota, /controller\.salvarConfiguracao\)/);
 });
 
 test("salvar bloqueio persiste e audita valor anterior e novo na mesma transação", async (t) => {

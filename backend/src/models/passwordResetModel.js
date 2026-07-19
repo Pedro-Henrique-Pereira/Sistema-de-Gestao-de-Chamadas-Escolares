@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const db = require("../database/db");
+const { registrarEvento } = require("../services/auditoriaService");
 
 function hashesCoincidem(hashCalculado, hashArmazenado) {
   const calculado = Buffer.from(String(hashCalculado || ""), "utf8");
@@ -107,6 +108,16 @@ async function redefinirSenha({ tokenHash, senhaHash }) {
       "DELETE FROM sessoes_ativas WHERE usuario_id = ?",
       [registro.usuario_id]
     );
+    await registrarEvento({
+      executor: connection,
+      usuario: { id: registro.usuario_id },
+      acao: "ALTERACAO_SENHA",
+      descricao: "A senha do usuário foi redefinida com sucesso. Nenhum dado da senha foi armazenado.",
+      entidade: "usuario",
+      entidadeId: registro.usuario_id,
+      resultado: "sucesso",
+      detalhes: { origem: "recuperacao_segura" },
+    });
 
     await connection.commit();
     return true;

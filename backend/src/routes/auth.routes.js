@@ -7,6 +7,7 @@ const passwordResetController = require("../controllers/passwordResetController"
 const { getCsrfToken } = require("../middlewares/csrfMiddleware");
 const { autenticar } = require("../middlewares/authMiddleware");
 const { formatarEmail } = require("../utils/formatadores");
+const { auditarMutacao } = require("../middlewares/auditoriaMiddleware");
 
 function normalizarEmailLogin(req) {
   return formatarEmail(req.body?.email || "") || "email-nao-informado";
@@ -100,7 +101,14 @@ function limparLoginLimiterAoSucesso(req, res, next) {
 }
 
 router.get("/csrf-token", getCsrfToken);
-router.post("/login", limparLoginLimiterAoSucesso, loginLimiter, authController.login);
+router.post("/login", limparLoginLimiterAoSucesso, loginLimiter, auditarMutacao({
+  acao: "LOGIN",
+  entidade: "sessao",
+  usuario: ({ payload }) => payload.usuario,
+  entidadeId: ({ payload }) => payload.usuario.id,
+  descricao: "Realizou login no sistema.",
+  descricaoFalha: "Tentativa de login não concluída.",
+}), authController.login);
 router.post(
   "/forgot-password",
   recuperacaoPorIpLimiter,
@@ -120,6 +128,9 @@ router.post(
 router.get("/dev-users", authController.listarUsuariosDev);
 router.post("/dev-login", authController.devLogin);
 router.get("/me", autenticar, authController.me);
-router.post("/logout", autenticar, authController.logout);
+router.post("/logout", autenticar, auditarMutacao({
+  acao: "LOGOUT", entidade: "sessao",
+  descricao: "Encerrou a sessão autenticada no sistema.",
+}), authController.logout);
 
 module.exports = router;
