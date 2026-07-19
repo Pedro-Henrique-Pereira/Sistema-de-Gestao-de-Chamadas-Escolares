@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Lysimaco Automação
+Comment=Automação local do Lysimaco Digital
+Exec=@APP_DIR@/launcher.sh
+Path=@APP_DIR@
+Icon=@APP_DIR@/assets/icon.png
+Terminal=false
+Categories=Utility;
+StartupNotify=true

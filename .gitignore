@@ -50,6 +50,7 @@ yarn-error.log*
 !backend/src/database/migrations/2026-07-18_recuperacao_senha.sql
 !backend/src/database/migrations/2026-07-18_bloqueio_edicao_chamadas.sql
 !backend/src/database/migrations/2026-07-19_logs_auditoria.sql
+!backend/src/database/migrations/2026-07-19_automacao_api.sql
 *.sqlite
 *.db
 *.dump
@@ -83,3 +84,8 @@ __pycache__/
 .venv/
 venv/
 env/
+lysimaco-automacao-app/runtime/*
+!lysimaco-automacao-app/runtime/.gitkeep
+!lysimaco-automacao-app/runtime/chromedriver/
+lysimaco-automacao-app/runtime/chromedriver/*
+!lysimaco-automacao-app/runtime/chromedriver/.gitkeep

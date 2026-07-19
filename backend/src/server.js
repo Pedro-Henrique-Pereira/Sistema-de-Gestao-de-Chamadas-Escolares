@@ -36,6 +36,7 @@ const relatoriosRoutes = require("./routes/relatorios.routes");
 const configuracoesEscolaRoutes = require("./routes/configuracoes-escola.routes");
 const mensagensRoutes = require("./routes/mensagens.routes");
 const automacaoRoutes = require("./routes/automacao.routes");
+const automationWorkerRoutes = require("./routes/automation-worker.routes");
 const { csrfProtection } = require("./middlewares/csrfMiddleware");
 const { securityHeaders } = require("./middlewares/securityHeaders");
 const { errorMiddleware, notFoundMiddleware } = require("./utils/errorHandler");
@@ -93,13 +94,16 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "X-CSRF-Token"],
+    allowedHeaders: ["Content-Type", "X-CSRF-Token", "Authorization"],
     maxAge: 600,
   })
 );
 
 app.use(express.json({ limit: "512kb", type: "application/json" }));
 app.use(cookieParser());
+// Integração servidor-a-servidor: token Bearer dedicado, sem cookies de usuário.
+// A rota é montada antes do CSRF porque não usa autenticação baseada em navegador.
+app.use("/api/automation-worker", automationWorkerRoutes);
 app.use(csrfProtection);
 
 app.use("/api/auth", authRoutes);

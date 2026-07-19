@@ -1,0 +1,18 @@
+{
+  "maquina_id": 1,
+  "tipo_maquina": "pedagoga",
+  "intervalo_verificacao": 15,
+  "modo_economico": true,
+  "iniciar_com_sistema": false,
+  "tempo_limite_inatividade": "01:30",
+  "horario_inicio": "07:00",
+  "horario_fim": "18:00",
+  "delays": {
+    "pausa_inicial": 3,
+    "pausa_entre_envios": 5,
+    "pausa_pos_envio": 1
+  },
+  "whatsapp": {
+    "tempo_espera_conversa": 35
+  }
+}

@@ -414,10 +414,15 @@ npm run dev
 
 ## Automação Desktop
 
+O aplicativo independente está em `lysimaco-automacao-app/`. Ele se comunica
+exclusivamente com `/api/automation-worker` por HTTPS e token Bearer dedicado por
+máquina. O aplicativo não acessa o MySQL nem utiliza cookies ou contas pessoais
+do sistema web.
+
 Instalar dependências:
 
 ```bash
-cd desktop-bot
+cd lysimaco-automacao-app
 
 pip install -r requirements.txt
 ```
