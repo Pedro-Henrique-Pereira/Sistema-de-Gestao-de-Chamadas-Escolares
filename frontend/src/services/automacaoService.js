@@ -36,6 +36,12 @@ export function listarFilasAutomacao() {
   return apiFetch("/api/automation/queues");
 }
 
+export function limparFilaMaquina(machineId) {
+  return apiFetch(`/api/automation/queues/${encodeURIComponent(machineId)}/clear`, {
+    method: "POST",
+  });
+}
+
 export function cancelarAutomacao(id) {
   return apiFetch(`/api/automation/tasks/${id}/cancel`, {
     method: "POST",

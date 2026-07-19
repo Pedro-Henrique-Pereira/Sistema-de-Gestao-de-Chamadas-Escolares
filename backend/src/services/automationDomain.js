@@ -17,6 +17,8 @@ const PUBLIC_ERROR_MESSAGES = Object.freeze({
   LEASE_EXPIRED: "A conexão com a máquina foi interrompida durante o envio.",
   ATTENDANCE_NOT_ELIGIBLE: "A ausência deixou de ser elegível para notificação.",
   CANCELLED: "Envio cancelado por usuário autorizado.",
+  DUPLICATE_ALREADY_SENT: "O responsável já foi notificado sobre esta ausência.",
+  DUPLICATE_IN_PROGRESS: "Esta notificação já está pendente ou em processamento.",
 });
 
 function httpError(message, status = 400, code = "VALIDATION_ERROR") {
@@ -103,6 +105,10 @@ function hashPayload(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function hashText(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
 function compareVersions(left, right) {
   const normalize = (value) => String(value || "0")
     .split(".")
@@ -140,6 +146,7 @@ module.exports = {
   assertMachineAllowed,
   compareVersions,
   hashPayload,
+  hashText,
   httpError,
   maskPhone,
   normalizeMessage,

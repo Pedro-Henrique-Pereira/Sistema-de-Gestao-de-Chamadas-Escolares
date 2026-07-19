@@ -10,10 +10,16 @@ async function createAttendanceTask(req, res, next) {
       attendanceId: req.body?.attendanceId,
       user: req.usuario,
     });
+    const blocked = Number(result.task.ignoredDuplicateCount || 0)
+      + Number(result.task.alreadyQueuedCount || 0);
+    const noNewDelivery = blocked > 0 && blocked === Number(result.task.total || 0);
+    const message = result.reused
+      ? "A solicitação já existia e foi reutilizada sem duplicar mensagens."
+      : noNewDelivery
+        ? "Nenhuma nova mensagem entrou na fila: os responsáveis já foram notificados ou já possuem envio em andamento."
+        : `Tarefa adicionada à fila da Máquina ${result.task.machineNumber}.`;
     return res.status(result.reused ? 200 : 201).json({
-      message: result.reused
-        ? "A solicitação já existia e foi reutilizada sem duplicar mensagens."
-        : `Tarefa adicionada à fila da Máquina ${result.task.machineNumber}.`,
+      message,
       reused: result.reused,
       task: result.task,
     });
@@ -92,6 +98,24 @@ async function cancelTask(req, res, next) {
   }
 }
 
+async function clearMachineQueue(req, res, next) {
+  try {
+    const result = await taskService.clearMachineQueue(
+      req.params.machineId,
+      req.usuario
+    );
+    const preserved = result.preservedProcessingTasks
+      ? ` ${result.preservedProcessingTasks} tarefa(s) em processamento foram preservadas.`
+      : "";
+    return res.json({
+      message: `Fila da Máquina ${result.machineNumber} limpa com sucesso. Foram removidas ${result.removedTasks} tarefa(s) pendente(s).${preserved}`,
+      result,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getMessageTemplate(req, res, next) {
   try {
     const [rows] = await db.execute(
@@ -130,6 +154,7 @@ async function updateMessageTemplate(req, res, next) {
 
 module.exports = {
   cancelTask,
+  clearMachineQueue,
   createAttendanceTask,
   createGroupTask,
   getMessageTemplate,

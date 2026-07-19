@@ -21,7 +21,9 @@ const {
   validarWorkerId,
 } = require("../services/automationWorkerService");
 const {
+  duplicateBlockCode,
   ensurePersonalizedTemplate,
+  publicDeliveryStatus,
 } = require("../services/automationTaskService");
 
 const ROOT = path.resolve(__dirname, "../../..");
@@ -109,7 +111,8 @@ test("tarefa de faltas nasce da chamada confirmada e tarefa de grupos deduplica 
   assert.match(service, /FROM registros_frequencia_alunos/);
   assert.match(service, /LOWER\(COALESCE\(f\.status, ''\)\) = 'ausente'/);
   assert.match(service, /COALESCE\(f\.atrasado, FALSE\) = FALSE/);
-  assert.match(service, /attendance:\$\{attendanceId\}:absence-notification/);
+  assert.match(service, /attendance-request:\$\{requestId\}/);
+  assert.match(service, /reserveAttendanceDeduplication/);
   assert.match(service, /Array\.from\(new Set/);
   assert.match(service, /groups:\$\{requestId\}/);
   assert.doesNotMatch(service, /FROM chamadas_diarias\s/);
@@ -208,4 +211,82 @@ test("aplicativo independente não contém acesso direto ao MySQL", () => {
   const source = arquivos.map((file) => fs.readFileSync(file, "utf8")).join("\n");
   assert.doesNotMatch(source, /mysql\.connector|mysql-connector-python|get_connection/);
   assert.doesNotMatch(source, /\b(?:SELECT|INSERT|UPDATE|DELETE|ALTER|CREATE)\s+(?:FROM|INTO|TABLE)/i);
+});
+
+test("deduplicação bloqueia sucesso e entregas ativas, mas libera falha final ou cancelamento", () => {
+  const cfg = { maxAttempts: 3 };
+  assert.equal(duplicateBlockCode({
+    delivery_status: "enviado",
+    task_status: "concluido",
+  }, cfg), "DUPLICATE_ALREADY_SENT");
+  assert.equal(duplicateBlockCode({
+    delivery_status: "pendente",
+    task_status: "pendente",
+  }, cfg), "DUPLICATE_IN_PROGRESS");
+  assert.equal(duplicateBlockCode({
+    delivery_status: "processando",
+    task_status: "executando",
+  }, cfg), "DUPLICATE_IN_PROGRESS");
+  assert.equal(duplicateBlockCode({
+    delivery_status: "erro",
+    task_status: "executando",
+    retentavel: true,
+    tentativas: 1,
+  }, cfg), "DUPLICATE_IN_PROGRESS");
+  assert.equal(duplicateBlockCode({
+    delivery_status: "erro",
+    task_status: "erro",
+    retentavel: false,
+    tentativas: 1,
+  }, cfg), null);
+  assert.equal(duplicateBlockCode({
+    delivery_status: "cancelado",
+    task_status: "cancelado",
+  }, cfg), null);
+});
+
+test("resultado público separa duplicidade, fila existente e falha real", () => {
+  assert.equal(publicDeliveryStatus({
+    status: "ignorado",
+    erro_codigo: "DUPLICATE_ALREADY_SENT",
+  }), "ignored_duplicate");
+  assert.equal(publicDeliveryStatus({
+    status: "ignorado",
+    erro_codigo: "DUPLICATE_IN_PROGRESS",
+  }), "already_queued");
+  assert.equal(publicDeliveryStatus({
+    status: "erro",
+    erro_codigo: "INVALID_PHONE",
+    retentavel: false,
+  }), "failed");
+});
+
+test("limpeza da fila trava a máquina, cancela somente pendentes e preserva execução", () => {
+  const service = fs.readFileSync(
+    path.join(ROOT, "backend/src/services/automationTaskService.js"),
+    "utf8"
+  );
+  const routes = fs.readFileSync(
+    path.join(ROOT, "backend/src/routes/automation.routes.js"),
+    "utf8"
+  );
+  assert.match(service, /async function clearMachineQueue/);
+  assert.match(service, /FROM automacao_maquinas[\s\S]+FOR UPDATE/);
+  assert.match(service, /status = 'pendente'[\s\S]+FOR UPDATE/);
+  assert.match(service, /status = 'executando'/);
+  assert.match(service, /ATTENDANCE_MACHINES/);
+  assert.match(service, /GROUP_MACHINES/);
+  assert.match(routes, /\/queues\/:machineId\/clear/);
+  assert.match(routes, /AUTOMACAO_FILA_LIMPA/);
+});
+
+test("migração cria trava persistente por destinatário e faz backfill de envios ativos", () => {
+  const migration = fs.readFileSync(
+    path.join(ROOT, "backend/src/database/migrations/2026-07-21_automacao_deduplicacao.sql"),
+    "utf8"
+  );
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS automacao_deduplicacao/);
+  assert.match(migration, /PRIMARY KEY \(chave_deduplicacao\)/);
+  assert.match(migration, /SHA2\(/);
+  assert.match(migration, /delivery\.status IN \('pendente', 'processando', 'enviado'\)/);
 });

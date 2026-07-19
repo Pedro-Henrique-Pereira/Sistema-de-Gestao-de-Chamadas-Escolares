@@ -16,6 +16,7 @@ import { pedagogaService } from "../services/pedagogaService";
 import {
   criarRequestId,
   criarTarefaFaltas,
+  limparFilaMaquina,
   listarMaquinasAutomacao,
   listarTarefasAutomacao,
   obterModeloMensagemAutomacao,
@@ -127,6 +128,7 @@ function Pedagoga() {
   const [maquinasAutomacao, setMaquinasAutomacao] = useState([]);
   const [tarefasAutomacaoRecentes, setTarefasAutomacaoRecentes] = useState([]);
   const [salvandoMaquinaPadrao, setSalvandoMaquinaPadrao] = useState(false);
+  const [limpandoFilaAutomacao, setLimpandoFilaAutomacao] = useState(false);
   const [automacaoModal, setAutomacaoModal] = useState({ aberto: false, ids: [] });
   const requestIdsFaltasRef = useRef({});
   const chamadasRefs = useRef({});
@@ -280,6 +282,32 @@ function Pedagoga() {
       setMensagem(error.message || "Erro ao salvar máquina padrão.");
     } finally {
       setSalvandoMaquinaPadrao(false);
+    }
+  }
+
+  async function limparFilaAutomacaoSelecionada() {
+    const machineNumber = Number(maquinaPadraoChamadas);
+    if (!maquinasPermitidasChamadas.includes(machineNumber)) {
+      setMensagem("Selecione uma máquina antes de limpar a fila.");
+      return;
+    }
+    const machine = maquinasAutomacao.find((item) => item.machineNumber === machineNumber);
+    const queuedTasks = Number(machine?.queueDepth || 0);
+    const confirmed = window.confirm(
+      `Tem certeza de que deseja apagar todas as ${queuedTasks} tarefa(s) pendente(s) da Máquina ${machineNumber}? `
+      + "Tarefas em processamento serão preservadas. Essa ação não poderá ser desfeita."
+    );
+    if (!confirmed) return;
+
+    try {
+      setLimpandoFilaAutomacao(true);
+      const response = await limparFilaMaquina(`machine-${machineNumber}`);
+      setMensagem(response.message || `Fila da Máquina ${machineNumber} limpa com sucesso.`);
+      await carregarContextoAutomacao();
+    } catch (error) {
+      setMensagem(error.message || "Não foi possível limpar a fila selecionada.");
+    } finally {
+      setLimpandoFilaAutomacao(false);
     }
   }
 
@@ -664,6 +692,7 @@ function Pedagoga() {
 
       setAutomacaoModal({ aberto: true, ids: [idFila] });
       setMensagem(data.message || `Tarefa adicionada à fila da Máquina ${maquinaSelecionada}.`);
+      delete requestIdsFaltasRef.current[chamada.id];
       await carregarContextoAutomacao();
     } catch (error) {
       setMensagem(error.message);
@@ -1294,6 +1323,14 @@ function Pedagoga() {
                   </small>
                 )}
               </div>
+              <button
+                className="automation-clear-queue-button"
+                type="button"
+                disabled={limpandoFilaAutomacao || loading || !maquinasPermitidasChamadas.includes(Number(maquinaPadraoChamadas))}
+                onClick={limparFilaAutomacaoSelecionada}
+              >
+                {limpandoFilaAutomacao ? "Limpando fila..." : "Limpar fila da máquina"}
+              </button>
             </div>
 
             <div className="content-card">

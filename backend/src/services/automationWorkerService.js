@@ -357,9 +357,14 @@ async function deliverySummary(connection, taskId, cfg) {
        SUM(status = 'pendente') AS pendentes,
        SUM(status = 'erro' AND retentavel = TRUE AND tentativas < ?) AS retentativas,
        SUM(
-         status IN ('ignorado', 'cancelado')
+         status = 'cancelado'
+         OR (
+           status = 'ignorado'
+           AND erro_codigo NOT IN ('DUPLICATE_ALREADY_SENT', 'DUPLICATE_IN_PROGRESS')
+         )
          OR (status = 'erro' AND (retentavel = FALSE OR tentativas >= ?))
        ) AS falhas_finais,
+       SUM(erro_codigo IN ('DUPLICATE_ALREADY_SENT', 'DUPLICATE_IN_PROGRESS')) AS ignorados,
        SUM(status = 'enviado') AS enviados
      FROM automacao_entregas
      WHERE fila_automacao_id = ?`,
@@ -371,6 +376,7 @@ async function deliverySummary(connection, taskId, cfg) {
     pending: Number(row?.pendentes || 0),
     retries: Number(row?.retentativas || 0),
     failures: Number(row?.falhas_finais || 0),
+    ignored: Number(row?.ignorados || 0),
     sent: Number(row?.enviados || 0),
   };
 }
@@ -391,7 +397,7 @@ async function finalizeTaskIfPossible(connection, taskId, machineId, cfg) {
   }
 
   let status = "erro";
-  if (summary.total > 0 && summary.sent === summary.total) status = "concluido";
+  if (summary.total > 0 && summary.sent + summary.ignored === summary.total) status = "concluido";
   else if (summary.sent > 0) status = "concluido_parcial";
 
   await connection.execute(

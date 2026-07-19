@@ -52,6 +52,7 @@ yarn-error.log*
 !backend/src/database/migrations/2026-07-19_logs_auditoria.sql
 !backend/src/database/migrations/2026-07-19_automacao_api.sql
 !backend/src/database/migrations/2026-07-20_automacao_tarefas_v2.sql
+!backend/src/database/migrations/2026-07-21_automacao_deduplicacao.sql
 *.sqlite
 *.db
 *.dump

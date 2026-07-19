@@ -14,6 +14,27 @@ router.get("/queues", autorizar("administracao"), controller.listQueues);
 router.get("/message-template", autorizar("pedagoga", "administracao"), controller.getMessageTemplate);
 
 router.post(
+  "/queues/:machineId/clear",
+  autorizar("pedagoga", "administracao"),
+  auditarMutacao({
+    acao: "AUTOMACAO_FILA_LIMPA",
+    entidade: "automacao_fila",
+    entidadeId: ({ payload, req }) => payload?.result?.machineId || req.params.machineId,
+    descricao: ({ payload }) => (
+      `Removeu ${Number(payload?.result?.removedTasks || 0)} tarefa(s) pendente(s) da fila da Máquina ${Number(payload?.result?.machineNumber || 0)}.`
+    ),
+    descricaoFalha: "A tentativa de limpar a fila da máquina não foi concluída.",
+    detalhes: ({ payload, req }) => ({
+      maquina: payload?.result?.machineNumber || req.params.machineId,
+      tarefas_removidas: payload?.result?.removedTasks ?? null,
+      tarefas_em_processamento_preservadas: payload?.result?.preservedProcessingTasks ?? null,
+      executado_em: payload?.result?.executedAt || null,
+    }),
+  }),
+  controller.clearMachineQueue
+);
+
+router.post(
   "/tasks/attendance-notifications",
   autorizar("pedagoga", "administracao"),
   auditarMutacao({
@@ -21,9 +42,11 @@ router.post(
     entidade: "automacao",
     entidadeId: ({ payload }) => payload?.task?.taskId,
     descricao: "Criou uma tarefa de notificações de ausência.",
-    detalhes: ({ req }) => ({
+    detalhes: ({ req, payload }) => ({
       chamada_id: req.body.attendanceId,
       maquina: req.body.machineId,
+      duplicatas_ja_notificadas: payload?.task?.ignoredDuplicateCount ?? null,
+      duplicatas_em_andamento: payload?.task?.alreadyQueuedCount ?? null,
     }),
   }),
   controller.createAttendanceTask

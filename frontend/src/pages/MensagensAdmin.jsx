@@ -3,6 +3,7 @@ import AutomacaoFeedbackModal from '../components/AutomacaoFeedbackModal';
 import {
   criarRequestId,
   criarTarefaGrupos,
+  limparFilaMaquina,
   listarFilasAutomacao,
   listarMaquinasAutomacao,
   listarTarefasAutomacao,
@@ -39,6 +40,7 @@ export default function MensagensAdmin() {
   const [carregando, setCarregando] = useState(true);
   const [salvandoGrupo, setSalvandoGrupo] = useState(false);
   const [enviando, setEnviando] = useState(false);
+  const [limpandoFila, setLimpandoFila] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [erro, setErro] = useState('');
   const [maquinas, setMaquinas] = useState([]);
@@ -198,6 +200,34 @@ export default function MensagensAdmin() {
       setErro(error.message || 'Erro ao enviar mensagem para a fila.');
     } finally {
       setEnviando(false);
+    }
+  }
+
+  async function handleLimparFila() {
+    const machineNumber = Number(maquinaDestino);
+    setFeedback('');
+    setErro('');
+    if (!MAQUINAS.includes(machineNumber)) {
+      setErro('Selecione uma máquina válida antes de limpar a fila.');
+      return;
+    }
+    const queue = filas.find((item) => item.machineNumber === machineNumber);
+    const queuedTasks = Number(queue?.queuedTasks ?? queue?.queueDepth ?? 0);
+    const confirmed = window.confirm(
+      `Tem certeza de que deseja apagar todas as ${queuedTasks} tarefa(s) pendente(s) da Máquina ${machineNumber}? `
+      + 'Tarefas em processamento serão preservadas. Essa ação não poderá ser desfeita.'
+    );
+    if (!confirmed) return;
+
+    setLimpandoFila(true);
+    try {
+      const response = await limparFilaMaquina(`machine-${machineNumber}`);
+      setFeedback(response.message || `Fila da Máquina ${machineNumber} limpa com sucesso.`);
+      await carregarTela();
+    } catch (error) {
+      setErro(error.message || 'Não foi possível limpar a fila selecionada.');
+    } finally {
+      setLimpandoFila(false);
     }
   }
 
@@ -388,6 +418,14 @@ export default function MensagensAdmin() {
             disabled={enviando || carregando || totalDestinatarios === 0}
           >
             {enviando ? 'Adicionando à fila...' : 'Enviar para fila'}
+          </button>
+          <button
+            className="admin-secondary-btn danger"
+            type="button"
+            disabled={limpandoFila || enviando || !MAQUINAS.includes(Number(maquinaDestino))}
+            onClick={handleLimparFila}
+          >
+            {limpandoFila ? 'Limpando fila...' : 'Limpar fila da máquina'}
           </button>
 
         </div>

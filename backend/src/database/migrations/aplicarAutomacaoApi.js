@@ -64,6 +64,7 @@ async function aplicar() {
     for (const arquivo of [
       "2026-07-19_automacao_api.sql",
       "2026-07-20_automacao_tarefas_v2.sql",
+      "2026-07-21_automacao_deduplicacao.sql",
     ]) {
       const sql = fs
         .readFileSync(path.join(__dirname, arquivo), "utf8")
@@ -143,6 +144,8 @@ async function aplicar() {
           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'automacao_maquinas') AS maquinas,
         (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'automacao_eventos') AS eventos,
+        (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'automacao_deduplicacao') AS deduplicacao,
         (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fila_automacao'
             AND COLUMN_NAME IN ('request_id', 'chave_idempotencia', 'registro_chamada_id', 'versao_api')) AS colunasTarefa,
@@ -153,6 +156,7 @@ async function aplicar() {
     if (
       !verificacao.maquinas
       || !verificacao.eventos
+      || !verificacao.deduplicacao
       || Number(verificacao.colunasTarefa) !== 4
       || Number(verificacao.colunasEntrega) !== 4
     ) {

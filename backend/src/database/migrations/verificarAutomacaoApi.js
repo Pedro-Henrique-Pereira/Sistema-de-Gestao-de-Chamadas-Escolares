@@ -25,6 +25,12 @@ async function verificar() {
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME = 'controle_envios_diarios'
   `);
+  const [[deduplication]] = await db.query(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(automacao_entrega_id IS NOT NULL) AS vinculadas
+    FROM automacao_deduplicacao
+  `);
   const [indexes] = await db.query(`
     SELECT DISTINCT INDEX_NAME
     FROM INFORMATION_SCHEMA.STATISTICS
@@ -81,6 +87,10 @@ async function verificar() {
     tasks,
     machines,
     legacyControlTableExists: Boolean(legacy.total),
+    deduplicationGuards: {
+      total: Number(deduplication.total || 0),
+      linked: Number(deduplication.vinculadas || 0),
+    },
     indexes: indexes.map((item) => item.INDEX_NAME),
     roleChecks,
     recentTaskCheck,

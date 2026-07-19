@@ -6,6 +6,7 @@ const {
   MESSAGE_TAGS,
   assertMachineAllowed,
   hashPayload,
+  hashText,
   httpError,
   maskPhone,
   normalizeMessage,
@@ -38,6 +39,115 @@ function automationConfig() {
   };
 }
 
+const DUPLICATE_ERROR_CODES = new Set([
+  "DUPLICATE_ALREADY_SENT",
+  "DUPLICATE_IN_PROGRESS",
+]);
+
+function referenceDate(value) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] || "";
+}
+
+function attendanceDeduplicationKey({
+  absenceDate,
+  studentId,
+  guardianId,
+  normalizedPhone,
+}) {
+  const recipient = guardianId
+    ? `guardian:${Number(guardianId)}`
+    : `phone:${String(normalizedPhone || "")}`;
+  return hashText(
+    `absence:${referenceDate(absenceDate)}:student:${Number(studentId)}:recipient:${recipient}`
+  );
+}
+
+function duplicateBlockCode(delivery, cfg = automationConfig()) {
+  if (!delivery) return null;
+  if (delivery.delivery_status === "enviado") return "DUPLICATE_ALREADY_SENT";
+  const taskActive = ["pendente", "executando"].includes(delivery.task_status);
+  const deliveryActive = ["pendente", "processando"].includes(delivery.delivery_status)
+    || (
+      delivery.delivery_status === "erro"
+      && Boolean(delivery.retentavel)
+      && Number(delivery.tentativas || 0) < cfg.maxAttempts
+    );
+  return taskActive && deliveryActive ? "DUPLICATE_IN_PROGRESS" : null;
+}
+
+function publicDeliveryStatus(delivery, cfg = automationConfig()) {
+  if (delivery.erro_codigo === "DUPLICATE_ALREADY_SENT") return "ignored_duplicate";
+  if (delivery.erro_codigo === "DUPLICATE_IN_PROGRESS") return "already_queued";
+  if (delivery.status === "enviado") return "success";
+  if (delivery.status === "processando") return "processing";
+  if (delivery.status === "pendente") return "queued";
+  if (
+    delivery.status === "erro"
+    && delivery.retentavel
+    && Number(delivery.tentativas) < cfg.maxAttempts
+  ) {
+    return "retrying";
+  }
+  return "failed";
+}
+
+async function reserveAttendanceDeduplication(connection, metadata, cfg) {
+  const key = attendanceDeduplicationKey(metadata);
+  const [insert] = await connection.execute(
+    `INSERT IGNORE INTO automacao_deduplicacao (
+      chave_deduplicacao,
+      tipo_notificacao,
+      aluno_id,
+      responsavel_id,
+      data_referencia
+    ) VALUES (?, 'absence_notification', ?, ?, ?)`,
+    [
+      key,
+      metadata.studentId,
+      metadata.guardianId || null,
+      referenceDate(metadata.absenceDate),
+    ]
+  );
+  if (insert.affectedRows === 1) {
+    return { key, blockCode: null };
+  }
+
+  const [[current]] = await connection.execute(
+    `SELECT
+       delivery.status AS delivery_status,
+       delivery.retentavel,
+       delivery.tentativas,
+       task.status AS task_status
+     FROM automacao_deduplicacao dedup
+     LEFT JOIN automacao_entregas delivery
+       ON delivery.id = dedup.automacao_entrega_id
+     LEFT JOIN fila_automacao task
+       ON task.id = delivery.fila_automacao_id
+     WHERE dedup.chave_deduplicacao = ?
+     LIMIT 1
+     FOR UPDATE`,
+    [key]
+  );
+  return { key, blockCode: duplicateBlockCode(current, cfg) };
+}
+
+async function bindAttendanceDeduplication(connection, key, deliveryId) {
+  await connection.execute(
+    `UPDATE automacao_deduplicacao
+        SET automacao_entrega_id = ?,
+            atualizado_em = CURRENT_TIMESTAMP
+      WHERE chave_deduplicacao = ?`,
+    [deliveryId, key]
+  );
+}
+
 async function recordEvent(executor, taskId, eventType, {
   deliveryId = null,
   status = null,
@@ -67,7 +177,8 @@ async function assertMachineRegistered(executor, machineId) {
       WHERE maquina_id = ?
         AND habilitada = TRUE
         AND estado <> 'disabled'
-      LIMIT 1`,
+      LIMIT 1
+      FOR UPDATE`,
     [machineId]
   );
   if (!rows[0]) {
@@ -136,7 +247,11 @@ async function updateTaskCounters(executor, taskId) {
             COUNT(*) AS total,
             SUM(status = 'enviado') AS sucessos,
             SUM(
-              status IN ('ignorado', 'cancelado')
+              status = 'cancelado'
+              OR (
+                status = 'ignorado'
+                AND erro_codigo NOT IN ('DUPLICATE_ALREADY_SENT', 'DUPLICATE_IN_PROGRESS')
+              )
               OR (status = 'erro' AND retentavel = FALSE)
             ) AS falhas
           FROM automacao_entregas
@@ -163,7 +278,7 @@ async function createAttendanceTask({
   if (!Number.isInteger(attendanceId) || attendanceId <= 0) {
     throw httpError("Chamada confirmada inválida.", 400, "INVALID_ATTENDANCE");
   }
-  const idempotencyKey = `attendance:${attendanceId}:absence-notification`;
+  const idempotencyKey = `attendance-request:${requestId}`;
   const cfg = automationConfig();
   const connection = await db.getConnection();
   let transaction = false;
@@ -266,6 +381,17 @@ async function createAttendanceTask({
         retryable = false;
         errorCode = "INVALID_PHONE";
       }
+      const deduplication = await reserveAttendanceDeduplication(connection, {
+        absenceDate: student.data_chamada,
+        studentId: student.aluno_id,
+        guardianId: student.responsavel_id,
+        normalizedPhone,
+      }, cfg);
+      if (deduplication.blockCode) {
+        status = "ignorado";
+        retryable = false;
+        errorCode = deduplication.blockCode;
+      }
       const message = renderAttendanceMessage(template, {
         guardianName: student.responsavel_nome || "responsável",
         studentName: student.aluno_nome,
@@ -293,7 +419,9 @@ async function createAttendanceTask({
         ) VALUES (?, ?, 'responsavel', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           taskId,
-          `attendance:${attendanceId}:student:${student.aluno_id}:absence`,
+          `attendance-attempt:${hashText(
+            `${requestId}:${student.aluno_id}:${student.responsavel_id || normalizedPhone || "unknown"}`
+          )}`,
           student.responsavel_nome || null,
           student.aluno_id,
           student.aluno_nome,
@@ -310,8 +438,14 @@ async function createAttendanceTask({
           errorCode ? new Date() : null,
         ]
       );
-      await recordEvent(connection, taskId, "DELIVERY_CREATED", {
-        deliveryId: Number(delivery.insertId),
+      const deliveryId = Number(delivery.insertId);
+      if (!deduplication.blockCode) {
+        await bindAttendanceDeduplication(connection, deduplication.key, deliveryId);
+      }
+      await recordEvent(connection, taskId, deduplication.blockCode
+        ? "DELIVERY_DUPLICATE_BLOCKED"
+        : "DELIVERY_CREATED", {
+        deliveryId,
         status,
         errorCode,
       });
@@ -319,24 +453,31 @@ async function createAttendanceTask({
 
     await updateTaskCounters(connection, taskId);
     const [[actionable]] = await connection.execute(
-      `SELECT COUNT(*) AS total
+      `SELECT
+         SUM(status = 'pendente') AS total,
+         SUM(erro_codigo IN ('DUPLICATE_ALREADY_SENT', 'DUPLICATE_IN_PROGRESS')) AS duplicadas,
+         COUNT(*) AS entregas
          FROM automacao_entregas
-        WHERE fila_automacao_id = ?
-          AND status = 'pendente'`,
+        WHERE fila_automacao_id = ?`,
       [taskId]
     );
     if (Number(actionable.total || 0) === 0) {
+      const onlyDuplicates = Number(actionable.duplicadas || 0) === Number(actionable.entregas || 0);
       await connection.execute(
         `UPDATE fila_automacao
-            SET status = 'erro',
+            SET status = ?,
                 concluido_em = NOW(),
-                erro = 'NO_VALID_RECIPIENTS'
+                erro = ?
           WHERE id = ?`,
-        [taskId]
+        [
+          onlyDuplicates ? "concluido" : "erro",
+          onlyDuplicates ? null : "NO_VALID_RECIPIENTS",
+          taskId,
+        ]
       );
       await recordEvent(connection, taskId, "TASK_FINISHED", {
-        status: "erro",
-        errorCode: "NO_VALID_RECIPIENTS",
+        status: onlyDuplicates ? "concluido" : "erro",
+        errorCode: onlyDuplicates ? null : "NO_VALID_RECIPIENTS",
       });
     } else {
       await recordEvent(connection, taskId, "TASK_QUEUED", { status: "pendente" });
@@ -578,12 +719,21 @@ async function getTask(taskIdValue, user) {
     [task.maquina_destino, task.data_solicitacao, task.data_solicitacao, task.id]
   );
   const state = machineState(task, cfg);
+  const duplicatesAlreadySent = deliveries.filter(
+    ({ erro_codigo: errorCode }) => errorCode === "DUPLICATE_ALREADY_SENT"
+  ).length;
+  const duplicatesInProgress = deliveries.filter(
+    ({ erro_codigo: errorCode }) => errorCode === "DUPLICATE_IN_PROGRESS"
+  ).length;
   const finalFailures = deliveries.filter((delivery) => (
-    ["ignorado", "cancelado"].includes(delivery.status)
+    (
+      ["ignorado", "cancelado"].includes(delivery.status)
+      && !DUPLICATE_ERROR_CODES.has(delivery.erro_codigo)
+    )
     || (delivery.status === "erro" && (!delivery.retentavel || Number(delivery.tentativas) >= cfg.maxAttempts))
   )).length;
   const successes = deliveries.filter(({ status }) => status === "enviado").length;
-  const processed = successes + finalFailures;
+  const processed = successes + finalFailures + duplicatesAlreadySent + duplicatesInProgress;
 
   return {
     taskId: Number(task.id),
@@ -599,6 +749,8 @@ async function getTask(taskIdValue, user) {
     processed,
     successCount: successes,
     failureCount: finalFailures,
+    ignoredDuplicateCount: duplicatesAlreadySent,
+    alreadyQueuedCount: duplicatesInProgress,
     remaining: Math.max((deliveries.length || Number(task.total_destinatarios || 0)) - processed, 0),
     createdAt: task.data_solicitacao,
     startedAt: task.iniciado_em,
@@ -613,15 +765,7 @@ async function getTask(taskIdValue, user) {
       groupId: delivery.grupo_whatsapp_id ? Number(delivery.grupo_whatsapp_id) : null,
       groupName: delivery.grupo_nome || null,
       maskedPhone: delivery.telefone_mascarado || null,
-      status: delivery.status === "enviado"
-        ? "success"
-        : delivery.status === "processando"
-          ? "processing"
-          : delivery.status === "pendente"
-            ? "queued"
-            : delivery.status === "erro" && delivery.retentavel && Number(delivery.tentativas) < cfg.maxAttempts
-              ? "retrying"
-              : "failed",
+      status: publicDeliveryStatus(delivery, cfg),
       attempts: Number(delivery.tentativas || 0),
       errorCode: delivery.erro_codigo || null,
       errorMessage: delivery.erro_mensagem || (delivery.erro_codigo ? publicErrorMessage(delivery.erro_codigo) : null),
@@ -730,10 +874,114 @@ async function cancelTask(taskIdValue, user) {
   }
 }
 
+async function clearMachineQueue(machineIdValue, user) {
+  const machineId = parseMachineId(machineIdValue);
+  const connection = await db.getConnection();
+  let transaction = false;
+  try {
+    await connection.beginTransaction();
+    transaction = true;
+    const userData = await requester(connection, user);
+    const allowedMachines = userData.tipo === "pedagoga"
+      ? ATTENDANCE_MACHINES
+      : userData.tipo === "administracao"
+        ? GROUP_MACHINES
+        : [];
+    assertMachineAllowed(machineId, allowedMachines);
+
+    const [[machine]] = await connection.execute(
+      `SELECT maquina_id
+         FROM automacao_maquinas
+        WHERE maquina_id = ?
+          AND habilitada = TRUE
+          AND estado <> 'disabled'
+        LIMIT 1
+        FOR UPDATE`,
+      [machineId]
+    );
+    if (!machine) {
+      throw httpError("Máquina inexistente ou desabilitada.", 409, "MACHINE_UNAVAILABLE");
+    }
+
+    const [pendingTasks] = await connection.execute(
+      `SELECT id
+         FROM fila_automacao
+        WHERE maquina_destino = ?
+          AND status = 'pendente'
+        ORDER BY data_solicitacao ASC, id ASC
+        FOR UPDATE`,
+      [machineId]
+    );
+    const [[processing]] = await connection.execute(
+      `SELECT COUNT(*) AS total
+         FROM fila_automacao
+        WHERE maquina_destino = ?
+          AND status = 'executando'`,
+      [machineId]
+    );
+    const taskIds = pendingTasks.map(({ id }) => Number(id)).filter(Number.isInteger);
+
+    if (taskIds.length) {
+      const placeholders = taskIds.map(() => "?").join(", ");
+      await connection.execute(
+        `UPDATE automacao_entregas
+            SET status = 'cancelado',
+                retentavel = FALSE,
+                erro_codigo = 'CANCELLED',
+                erro_mensagem = ?,
+                concluido_em = NOW(),
+                lock_owner = NULL,
+                lock_adquirido_em = NULL
+          WHERE fila_automacao_id IN (${placeholders})
+            AND (
+              status = 'pendente'
+              OR (status = 'erro' AND retentavel = TRUE)
+            )`,
+        [publicErrorMessage("CANCELLED"), ...taskIds]
+      );
+      await connection.execute(
+        `UPDATE fila_automacao
+            SET status = 'cancelado',
+                concluido_em = NOW(),
+                erro = 'QUEUE_CLEARED',
+                lock_owner = NULL,
+                lock_adquirido_em = NULL
+          WHERE id IN (${placeholders})
+            AND status = 'pendente'`,
+        taskIds
+      );
+      for (const taskId of taskIds) {
+        await updateTaskCounters(connection, taskId);
+        await recordEvent(connection, taskId, "TASK_REMOVED_FROM_QUEUE", {
+          status: "cancelado",
+          errorCode: "QUEUE_CLEARED",
+        });
+      }
+    }
+
+    const [[clock]] = await connection.execute("SELECT NOW(3) AS executado_em");
+    await connection.commit();
+    transaction = false;
+    return {
+      machineId: `machine-${machineId}`,
+      machineNumber: machineId,
+      removedTasks: taskIds.length,
+      preservedProcessingTasks: Number(processing.total || 0),
+      executedAt: clock.executado_em,
+    };
+  } catch (error) {
+    if (transaction) await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
   DEFAULT_ATTENDANCE_MESSAGE,
   automationConfig,
   cancelTask,
+  clearMachineQueue,
   createAttendanceTask,
   createGroupTask,
   getTask,
@@ -742,6 +990,8 @@ module.exports = {
   listQueues,
   listTasks,
   machineState,
+  duplicateBlockCode,
+  publicDeliveryStatus,
   recordEvent,
   updateTaskCounters,
 };

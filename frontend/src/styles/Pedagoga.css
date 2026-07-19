@@ -1561,6 +1561,28 @@ button:focus-visible {
   gap: 10px;
 }
 
+.automation-clear-queue-button {
+  align-self: flex-start;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff7f7;
+  color: #b42318;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.automation-clear-queue-button:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.automation-clear-queue-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .automation-edit-button {
   width: 42px;
   height: 42px;
@@ -1606,6 +1628,10 @@ button:focus-visible {
   .automation-edit-button {
     flex: 0 0 46px;
     height: auto;
+  }
+
+  .automation-clear-queue-button {
+    width: 100%;
   }
 }
 

@@ -42,6 +42,14 @@ function summarize(tasks) {
   const processed = values.reduce((sum, task) => sum + Number(task.processed || 0), 0);
   const successes = values.reduce((sum, task) => sum + Number(task.successCount || 0), 0);
   const failures = values.reduce((sum, task) => sum + Number(task.failureCount || 0), 0);
+  const ignoredDuplicates = values.reduce(
+    (sum, task) => sum + Number(task.ignoredDuplicateCount || 0),
+    0
+  );
+  const alreadyQueued = values.reduce(
+    (sum, task) => sum + Number(task.alreadyQueuedCount || 0),
+    0
+  );
   let status = "queued";
   if (values.some((task) => task.status === "processing")) status = "processing";
   else if (values.some((task) => task.status === "waiting_for_machine")) status = "waiting_for_machine";
@@ -51,7 +59,7 @@ function summarize(tasks) {
       ? "completed_partially"
       : values.find((task) => PROBLEM.has(task.status))?.status || "completed_with_failures";
   }
-  return { total, processed, successes, failures, status };
+  return { total, processed, successes, failures, ignoredDuplicates, alreadyQueued, status };
 }
 
 export default function AutomacaoFeedbackModal({
@@ -89,6 +97,8 @@ export default function AutomacaoFeedbackModal({
       processed: 0,
       successCount: 0,
       failureCount: 0,
+      ignoredDuplicateCount: 0,
+      alreadyQueuedCount: 0,
       results: [],
     }])));
     setDurationSeconds(0);
@@ -142,6 +152,11 @@ export default function AutomacaoFeedbackModal({
   const failures = taskList.flatMap((task) => (
     (task.results || []).filter((result) => result.status === "failed")
   ));
+  const duplicateBlocks = taskList.flatMap((task) => (
+    (task.results || []).filter((result) => (
+      result.status === "ignored_duplicate" || result.status === "already_queued"
+    ))
+  ));
   const cancellable = permitirCancelamento
     && taskList.length > 0
     && taskList.every((task) => ["waiting_for_machine", "queued"].includes(task.status));
@@ -177,8 +192,25 @@ export default function AutomacaoFeedbackModal({
           <strong>{summary.processed} de {summary.total} processados</strong>
           <span>Sucessos: {summary.successes}</span>
           <span>Falhas: {summary.failures}</span>
+          <span>Já notificados: {summary.ignoredDuplicates}</span>
+          <span>Já na fila: {summary.alreadyQueued}</span>
           <span>Restantes: {Math.max(summary.total - summary.processed, 0)}</span>
         </div>
+
+        {duplicateBlocks.length > 0 && (
+          <div className="automation-failure-list">
+            <h3>Envios não duplicados</h3>
+            {duplicateBlocks.map((result) => (
+              <div key={result.deliveryId} className="automation-failure-item">
+                <strong>{result.studentName || result.recipientName || "Aluno"}</strong>
+                {result.studentName && result.recipientName && (
+                  <span>Responsável: {result.recipientName}</span>
+                )}
+                <small>{result.errorMessage}</small>
+              </div>
+            ))}
+          </div>
+        )}
 
         {failures.length > 0 && (
           <div className="automation-failure-list">

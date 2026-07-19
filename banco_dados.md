@@ -545,6 +545,29 @@ CREATE TABLE IF NOT EXISTS automacao_entregas (
   CONSTRAINT chk_automacao_entregas_tentativas CHECK (tentativas <= 5)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS automacao_deduplicacao (
+  chave_deduplicacao CHAR(64) NOT NULL PRIMARY KEY,
+  tipo_notificacao VARCHAR(40) NOT NULL,
+  aluno_id INT NOT NULL,
+  responsavel_id INT NULL,
+  data_referencia DATE NOT NULL,
+  automacao_entrega_id BIGINT NULL,
+  criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_automacao_dedup_aluno_data (aluno_id, data_referencia),
+  KEY idx_automacao_dedup_responsavel_data (responsavel_id, data_referencia),
+  KEY idx_automacao_dedup_entrega (automacao_entrega_id),
+  CONSTRAINT fk_automacao_dedup_aluno
+    FOREIGN KEY (aluno_id) REFERENCES alunos(id)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT fk_automacao_dedup_responsavel
+    FOREIGN KEY (responsavel_id) REFERENCES responsaveis(id)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT fk_automacao_dedup_entrega
+    FOREIGN KEY (automacao_entrega_id) REFERENCES automacao_entregas(id)
+    ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS automacao_maquinas (
   maquina_id TINYINT NOT NULL PRIMARY KEY,
   identidade VARCHAR(30) NOT NULL,

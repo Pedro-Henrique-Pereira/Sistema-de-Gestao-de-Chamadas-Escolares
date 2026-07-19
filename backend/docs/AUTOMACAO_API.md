@@ -55,6 +55,11 @@ Todas as rotas abaixo exigem a sessão web e autorização no backend:
   - retorna heartbeat, estado, versão e fila.
 - `GET /api/automation/queues`
   - somente administrador.
+- `POST /api/automation/queues/:machineId/clear`
+  - pedagoga: somente Máquinas 1 e 2;
+  - administrador: somente Máquinas 3, 4 e 5;
+  - retira da fila apenas tarefas `pendente`;
+  - preserva tarefas `executando`, entregas finalizadas, eventos e auditoria.
 - `POST /api/automation/tasks/:id/cancel`
   - somente administrador e apenas antes do início.
 - `GET|PUT /api/automation/message-template`
@@ -119,6 +124,22 @@ limite configurado de tentativas.
 As reservas usam transação, lock da máquina, `FOR UPDATE SKIP LOCKED`, lease e
 ordenação por `data_solicitacao, id`. O heartbeat renova o lease da tarefa em
 andamento. A fonte de verdade permanece no backend.
+
+## Limpeza de fila e prevenção de duplicidade
+
+A limpeza é lógica: tarefas pendentes passam para `cancelado` e deixam a fila
+ativa, mas continuam disponíveis no histórico e na auditoria. O backend bloqueia
+a linha da máquina antes da operação, portanto uma tarefa não pode ser capturada
+pelo aplicativo desktop ao mesmo tempo em que está sendo removida. Tarefas já em
+execução são sempre preservadas.
+
+Notificações de ausência usam uma chave SHA-256 formada por tipo da notificação,
+data da chamada, ID do aluno e ID do responsável; o telefone normalizado é usado
+somente como alternativa quando não existe ID de responsável. A tabela
+`automacao_deduplicacao` fornece exclusão mútua entre solicitações simultâneas.
+Envio concluído, pendente ou em processamento bloqueia uma nova entrega. Falha
+final ou cancelamento libera uma tentativa posterior. Telefones e conteúdo de
+mensagem não são gravados nessa trava nem nos logs.
 
 ## Instalação
 
