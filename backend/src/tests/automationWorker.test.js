@@ -124,6 +124,8 @@ test("fila usa lock por máquina, FIFO e checkpoints sem bloquear outras máquin
   assert.match(service, /WHERE maquina_destino = \?/);
   assert.match(service, /data_solicitacao ASC,\s*id ASC/);
   assert.match(service, /FOR UPDATE SKIP LOCKED/);
+  assert.match(service, /LIMIT \$\{batchSize\}\s+FOR UPDATE SKIP LOCKED/);
+  assert.doesNotMatch(service, /LIMIT \?\s+FOR UPDATE SKIP LOCKED/);
   assert.match(service, /tarefa_atual_id/);
   assert.match(service, /lock_adquirido_em = NOW\(\)/);
   assert.match(service, /existingBatchForOwner/);

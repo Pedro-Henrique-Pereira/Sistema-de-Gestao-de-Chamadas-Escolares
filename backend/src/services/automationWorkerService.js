@@ -244,6 +244,10 @@ async function invalidateChangedAttendance(connection, taskId) {
 }
 
 async function reserveBatch(connection, taskId, owner, cfg) {
+  const batchSize = Math.max(
+    1,
+    Math.min(100, Number.parseInt(cfg.batchSize, 10) || 25)
+  );
   await connection.execute(
     `UPDATE automacao_entregas
         SET status = 'erro',
@@ -272,9 +276,9 @@ async function reserveBatch(connection, taskId, owner, cfg) {
           )
         )
       ORDER BY id ASC
-      LIMIT ?
+      LIMIT ${batchSize}
       FOR UPDATE SKIP LOCKED`,
-    [taskId, cfg.maxTentativas, cfg.batchSize]
+    [taskId, cfg.maxTentativas]
   );
   const ids = candidates.map(({ id }) => Number(id)).filter(Number.isInteger);
   if (!ids.length) return [];
