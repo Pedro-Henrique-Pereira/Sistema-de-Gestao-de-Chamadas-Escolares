@@ -1,0 +1,9 @@
+tunnel: SUBSTITUIR_PELO_ID_DO_TUNNEL
+credentials-file: /etc/cloudflared/SUBSTITUIR_PELO_ID_DO_TUNNEL.json
+
+ingress:
+  - hostname: lysimaco.com.br
+    service: http://frontend:80
+  - hostname: www.lysimaco.com.br
+    service: http://frontend:80
+  - service: http_status:404

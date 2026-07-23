@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 import re
+from typing import Callable
 
 from selenium import webdriver
 from selenium.webdriver import ChromeOptions, FirefoxOptions
@@ -35,6 +36,18 @@ logger = logging.getLogger(__name__)
 WHATSAPP_WEB_URL = "https://web.whatsapp.com/"
 
 
+class WhatsAppReadinessTimeout(TimeoutException):
+    """Timeout seguro da inicialização, sem expor conteúdo da sessão."""
+
+    def __init__(self, *, qr_detectado: bool = False) -> None:
+        self.qr_detectado = bool(qr_detectado)
+        super().__init__(
+            "WhatsApp desconectado; leia o QR Code."
+            if self.qr_detectado
+            else "Tempo limite de carregamento do WhatsApp excedido."
+        )
+
+
 def _identificador_tecnico(valor: str | None) -> str:
     return hashlib.sha256(str(valor or "").encode("utf-8")).hexdigest()[:10]
 
@@ -45,7 +58,8 @@ def _mascarar_telefone(valor: str | None) -> str:
 
 
 class WhatsAppService:
-    def __init__(self) -> None:
+    def __init__(self, status_callback: Callable[[str], None] | None = None) -> None:
+        self.status_callback = status_callback
         self.driver = self._build_driver()
         self.driver.set_page_load_timeout(settings.page_load_timeout_seconds)
         self.wait = WebDriverWait(self.driver, settings.page_load_timeout_seconds)
@@ -53,6 +67,16 @@ class WhatsAppService:
             self.driver.implicitly_wait(0)
         except WebDriverException:
             pass
+        self._minimizar_janela_controlada()
+
+
+    def _notificar_status(self, estado: str) -> None:
+        if self.status_callback is None:
+            return
+        try:
+            self.status_callback(estado)
+        except Exception:
+            logger.warning("Nao foi possivel atualizar o estado visual do WhatsApp.")
 
     def driver_esta_vivo(self) -> bool:
         """Verifica se a sessão atual do Selenium ainda pode ser usada."""
@@ -80,6 +104,16 @@ class WhatsAppService:
             self.driver.implicitly_wait(0)
         except WebDriverException:
             pass
+        self._minimizar_janela_controlada()
+
+    def _minimizar_janela_controlada(self) -> None:
+        """Mantém somente o navegador da automação fora da frente do usuário."""
+        if settings.headless:
+            return
+        try:
+            self.driver.minimize_window()
+        except (WebDriverException, NoSuchWindowException):
+            logger.warning("Nao foi possivel minimizar a janela controlada da automacao.")
 
     def _build_driver(self):
         browser = settings.browser
@@ -87,7 +121,7 @@ class WhatsAppService:
         profile_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("Iniciando driver do navegador: %s", browser)
-        logger.info("Perfil persistente do WhatsApp: %s", profile_dir)
+        logger.info("Perfil persistente local do WhatsApp configurado.")
 
         if browser in {"chrome", "brave"}:
             options = ChromeOptions()
@@ -103,7 +137,7 @@ class WhatsAppService:
             options.add_argument("--disable-gpu")
             options.add_argument("--no-sandbox")
             options.add_argument("--remote-debugging-port=0")
-            options.add_argument("--start-maximized")
+            options.add_argument("--start-minimized")
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_experimental_option("useAutomationExtension", False)
 
@@ -130,7 +164,6 @@ class WhatsAppService:
             options = FirefoxOptions()
             if settings.headless:
                 options.add_argument("--headless")
-            options.add_argument("--start-maximized")
             options.add_argument("-profile")
             options.add_argument(str(profile_dir))
             service = FirefoxService(GeckoDriverManager().install())
@@ -167,10 +200,52 @@ class WhatsAppService:
         self.abrir_whatsapp()
 
     def abrir_whatsapp(self) -> None:
+        self._notificar_status("Abrindo WhatsApp.")
         self.garantir_driver()
-        logger.info("Abrindo WhatsApp Web...")
-        self.driver.get(WHATSAPP_WEB_URL)
+        aba_existente = self._selecionar_aba_whatsapp_existente()
+        if aba_existente:
+            logger.info("Reutilizando a aba do WhatsApp Web controlada pela automacao.")
+        else:
+            logger.info("Abrindo WhatsApp Web na janela controlada pela automacao...")
+            try:
+                self.driver.get(WHATSAPP_WEB_URL)
+                self._minimizar_janela_controlada()
+            except WebDriverException:
+                self._notificar_status("Falha ao abrir o WhatsApp.")
+                raise
+
+        self._notificar_status("Aguardando carregamento.")
         self._aguardar_whatsapp_pronto()
+
+    def _selecionar_aba_whatsapp_existente(self) -> bool:
+        """Reutiliza uma aba ja controlada sem criar, fechar ou recarregar abas."""
+        try:
+            if "web.whatsapp.com" in str(self.driver.current_url or "").lower():
+                return True
+        except (WebDriverException, NoSuchWindowException):
+            pass
+
+        try:
+            handles = list(self.driver.window_handles)
+            handle_inicial = self.driver.current_window_handle
+        except (WebDriverException, NoSuchWindowException):
+            return False
+
+        for handle in handles:
+            try:
+                self.driver.switch_to.window(handle)
+                if "web.whatsapp.com" in str(self.driver.current_url or "").lower():
+                    self._minimizar_janela_controlada()
+                    return True
+            except (WebDriverException, NoSuchWindowException):
+                continue
+
+        try:
+            if handle_inicial in handles:
+                self.driver.switch_to.window(handle_inicial)
+        except (WebDriverException, NoSuchWindowException):
+            pass
+        return False
 
     def _existe(self, by: By, selector: str) -> bool:
         try:
@@ -178,40 +253,61 @@ class WhatsAppService:
         except (WebDriverException, NoSuchWindowException):
             return False
 
-    def _whatsapp_logado(self) -> bool:
-        # div#side é o painel lateral de conversas. É um dos sinais mais estáveis de login concluído.
-        if self._existe(By.CSS_SELECTOR, "div#side"):
-            return True
+    def _existe_visivel(self, by: By, selector: str) -> bool:
+        try:
+            return any(elemento.is_displayed() for elemento in self.driver.find_elements(by, selector))
+        except (WebDriverException, NoSuchWindowException):
+            return False
 
-        # Fallback: caixa de busca/lista do WhatsApp ou campo de conversa.
-        seletores = [
-            "div[aria-label='Caixa de texto de pesquisa'][contenteditable='true']",
-            "div[aria-label='Search input textbox'][contenteditable='true']",
-            "footer div[contenteditable='true'][role='textbox']",
-            "div[aria-label='Digite uma mensagem'][contenteditable='true']",
-            "div[aria-label='Type a message'][contenteditable='true']",
+    def _whatsapp_logado(self) -> bool:
+        if self._qr_visivel():
+            return False
+
+        # O painel lateral sozinho pode surgir antes da hidratacao terminar. Exigimos
+        # tambem um controle operacional real da lista/busca de conversas.
+        if not self._existe_visivel(By.CSS_SELECTOR, "div#side"):
+            return False
+
+        seletores_operacionais = [
+            "div#side div[aria-label='Caixa de texto de pesquisa'][contenteditable='true']",
+            "div#side div[aria-label='Search input textbox'][contenteditable='true']",
+            "div#side div[role='textbox'][contenteditable='true']",
+            "div#pane-side",
+            "div#side [data-testid='chat-list']",
         ]
-        return any(self._existe(By.CSS_SELECTOR, selector) for selector in seletores)
+        return any(
+            self._existe_visivel(By.CSS_SELECTOR, selector)
+            for selector in seletores_operacionais
+        )
 
     def _qr_visivel(self) -> bool:
-        # Em pt-BR/inglês o QR costuma aparecer como canvas. A checagem é usada apenas para log.
-        return self._existe(By.CSS_SELECTOR, "canvas") or self._existe(By.CSS_SELECTOR, "div[data-testid='qrcode']")
+        seletores = [
+            "div[data-testid='qrcode']",
+            "div[data-ref] canvas",
+            "canvas[aria-label*='QR']",
+            "canvas[aria-label*='qr']",
+        ]
+        return any(self._existe_visivel(By.CSS_SELECTOR, seletor) for seletor in seletores)
 
     def _aguardar_whatsapp_pronto(self) -> None:
-        logger.info("Aguardando WhatsApp Web carregar/login...")
+        logger.info("Aguardando carregamento e verificando a sessao do WhatsApp Web...")
         inicio = time.monotonic()
         ultimo_log = 0.0
         qr_avisado = False
 
         while time.monotonic() - inicio < settings.wait_login_seconds:
+            if not qr_avisado:
+                self._notificar_status("Verificando sessão.")
             if self._whatsapp_logado():
-                logger.info("WhatsApp Web pronto para envio.")
+                self._notificar_status("WhatsApp conectado e pronto.")
+                logger.info("WhatsApp conectado e pronto para envio.")
                 return
 
             decorrido = int(time.monotonic() - inicio)
 
             if self._qr_visivel() and not qr_avisado:
-                logger.info("QR Code detectado. Escaneie com o celular e aguarde; o robô continuará sozinho após o login.")
+                self._notificar_status("WhatsApp desconectado — leia o QR Code.")
+                logger.warning("WhatsApp desconectado. Leia o QR Code; a fila permanece pausada.")
                 qr_avisado = True
 
             if time.monotonic() - ultimo_log >= 5:
@@ -224,17 +320,79 @@ class WhatsAppService:
 
             time.sleep(1)
 
-        screenshot = BASE_DIR / "logs" / "whatsapp_timeout.png"
+        if qr_avisado:
+            self._notificar_status("WhatsApp desconectado — leia o QR Code.")
+        else:
+            self._notificar_status("Tempo limite de carregamento excedido.")
+        raise WhatsAppReadinessTimeout(qr_detectado=qr_avisado)
+    def _elemento_no_escopo(self, elemento, seletor_ancestral: str) -> bool:
         try:
-            screenshot.parent.mkdir(exist_ok=True)
-            self.driver.save_screenshot(str(screenshot))
-            logger.error("Screenshot do timeout salvo em: %s", screenshot)
+            return bool(
+                self.driver.execute_script(
+                    "return Boolean(arguments[0].closest(arguments[1]));",
+                    elemento,
+                    seletor_ancestral,
+                )
+            )
         except WebDriverException:
-            pass
+            return False
 
-        raise TimeoutException(
-            "WhatsApp Web não ficou pronto. Verifique se o QR Code foi escaneado, se há internet e se a janela não foi fechada."
-        )
+    def _eh_campo_pesquisa(self, elemento) -> bool:
+        try:
+            return (
+                elemento.is_displayed()
+                and elemento.is_enabled()
+                and self._elemento_no_escopo(elemento, "#side")
+                and not self._elemento_no_escopo(elemento, "footer")
+            )
+        except WebDriverException:
+            return False
+
+    def _eh_campo_composicao(self, elemento) -> bool:
+        try:
+            return (
+                elemento.is_displayed()
+                and elemento.is_enabled()
+                and self._elemento_no_escopo(elemento, "#main footer")
+                and not self._elemento_no_escopo(elemento, "#side")
+            )
+        except WebDriverException:
+            return False
+
+    def _texto_editavel(self, elemento) -> str:
+        try:
+            return str(
+                self.driver.execute_script(
+                    "return (arguments[0].innerText || arguments[0].textContent || '');",
+                    elemento,
+                )
+                or ""
+            ).strip()
+        except WebDriverException:
+            return str(getattr(elemento, "text", "") or "").strip()
+
+    def _limpar_editavel(self, elemento, descricao: str) -> None:
+        elemento.click()
+        elemento.send_keys(Keys.CONTROL, "a")
+        elemento.send_keys(Keys.BACKSPACE)
+        try:
+            WebDriverWait(self.driver, 2, poll_frequency=0.2).until(
+                lambda _driver: not self._texto_editavel(elemento)
+            )
+        except TimeoutException:
+            self.driver.execute_script(
+                """
+                const el = arguments[0];
+                el.focus();
+                el.textContent = '';
+                el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContentBackward'}));
+                """,
+                elemento,
+            )
+            WebDriverWait(self.driver, 2, poll_frequency=0.2).until(
+                lambda _driver: not self._texto_editavel(elemento),
+                f"{descricao} nao ficou vazio apos a limpeza.",
+            )
 
     def _aguardar_conversa_pronta(self):
         logger.info("Aguardando conversa abrir e campo de mensagem ficar disponível...")
@@ -242,7 +400,6 @@ class WhatsAppService:
             "footer div[contenteditable='true'][role='textbox']",
             "div[aria-label='Digite uma mensagem'][contenteditable='true']",
             "div[aria-label='Type a message'][contenteditable='true']",
-            "div[contenteditable='true'][role='textbox']",
         ]
 
         def encontrar_caixa(driver):
@@ -254,7 +411,7 @@ class WhatsAppService:
 
             for seletor in seletores_caixa:
                 for elemento in driver.find_elements(By.CSS_SELECTOR, seletor):
-                    if elemento.is_displayed() and elemento.is_enabled():
+                    if self._eh_campo_composicao(elemento):
                         return elemento
             return False
 
@@ -328,15 +485,6 @@ class WhatsAppService:
 
 
     @staticmethod
-    def _xpath_literal(texto: str) -> str:
-        if "'" not in texto:
-            return f"'{texto}'"
-        if '"' not in texto:
-            return f'"{texto}"'
-        partes = texto.split("'")
-        return "concat(" + ', "\'", '.join(f"'{parte}'" for parte in partes) + ")"
-
-    @staticmethod
     def _normalizar_nome_grupo_para_busca(valor: str | None) -> str:
         """Remove espaços e símbolos ordinais usados de forma diferente no cadastro/WhatsApp."""
         texto = str(valor or "").strip()
@@ -347,7 +495,8 @@ class WhatsAppService:
     @classmethod
     def _normalizar_nome_grupo_para_comparacao(cls, valor: str | None) -> str:
         """Normalização leve para comparar títulos encontrados no WhatsApp."""
-        return cls._normalizar_nome_grupo_para_busca(valor).casefold()
+        texto = re.sub(r"\s+", " ", str(valor or "")).strip()
+        return texto.casefold()
 
     def _variantes_nome_grupo(self, nome_grupo: str, nome_grupo_busca: str | None = None) -> list[str]:
         variantes: list[str] = []
@@ -363,73 +512,15 @@ class WhatsAppService:
         return variantes[:2]
 
 
-    def _elemento_focado_editavel(self):
-        """Retorna o elemento focado se ele for uma caixa editável do WhatsApp."""
-        try:
-            elemento = self.driver.switch_to.active_element
-            if not elemento:
-                return None
-            tag = (elemento.tag_name or "").lower()
-            contenteditable = (elemento.get_attribute("contenteditable") or "").lower()
-            role = (elemento.get_attribute("role") or "").lower()
-            if contenteditable == "true" or role == "textbox" or tag in {"input", "textarea"}:
-                return elemento
-        except WebDriverException:
-            return None
-        return None
-
-    def _buscar_editaveis_visiveis_por_js(self):
-        """Busca caixas editáveis visíveis sem depender de data-tab/aria-label fixo."""
-        try:
-            return self.driver.execute_script(
-                """
-                const nodes = Array.from(document.querySelectorAll(
-                    "div[contenteditable='true'], [role='textbox'], textarea, input[type='text']"
-                ));
-
-                function visible(el) {
-                    const r = el.getBoundingClientRect();
-                    const st = window.getComputedStyle(el);
-                    return r.width > 20 && r.height > 10 &&
-                           st.display !== 'none' && st.visibility !== 'hidden' &&
-                           el.offsetParent !== null;
-                }
-
-                return nodes.filter(visible).sort((a, b) => {
-                    const ar = a.getBoundingClientRect();
-                    const br = b.getBoundingClientRect();
-
-                    const aSide = !!a.closest('#side');
-                    const bSide = !!b.closest('#side');
-                    if (aSide !== bSide) return aSide ? -1 : 1;
-
-                    const aSearch = ((a.getAttribute('aria-label') || '') + ' ' +
-                                     (a.getAttribute('aria-placeholder') || '') + ' ' +
-                                     (a.getAttribute('placeholder') || '')).toLowerCase();
-                    const bSearch = ((b.getAttribute('aria-label') || '') + ' ' +
-                                     (b.getAttribute('aria-placeholder') || '') + ' ' +
-                                     (b.getAttribute('placeholder') || '')).toLowerCase();
-
-                    const ak = /pesquis|search|buscar|start new chat|começar/.test(aSearch) ? 0 : 1;
-                    const bk = /pesquis|search|buscar|start new chat|começar/.test(bSearch) ? 0 : 1;
-                    if (ak !== bk) return ak - bk;
-
-                    return ar.top - br.top;
-                });
-                """
-            ) or []
-        except WebDriverException:
-            return []
-
     def _clicar_possivel_botao_pesquisa(self) -> bool:
         seletores = [
-            "button[aria-label*='Pesquisar']",
-            "button[aria-label*='Search']",
-            "button[title*='Pesquisar']",
-            "button[title*='Search']",
-            "div[role='button'][aria-label*='Pesquisar']",
-            "div[role='button'][aria-label*='Search']",
-            "span[data-icon='search']",
+            "div#side button[aria-label*='Pesquisar']",
+            "div#side button[aria-label*='Search']",
+            "div#side button[title*='Pesquisar']",
+            "div#side button[title*='Search']",
+            "div#side div[role='button'][aria-label*='Pesquisar']",
+            "div#side div[role='button'][aria-label*='Search']",
+            "div#side span[data-icon='search']",
         ]
         for seletor in seletores:
             try:
@@ -447,257 +538,316 @@ class WhatsAppService:
                 continue
         return False
 
-    def _acionar_atalho_pesquisa(self) -> None:
-        """Abre a busca do WhatsApp por atalhos. Isso evita depender do botão/placeholder."""
-        tentativas = [
-            lambda: ActionChains(self.driver).key_down(Keys.CONTROL).key_down(Keys.ALT).send_keys("/").key_up(Keys.ALT).key_up(Keys.CONTROL).perform(),
-            lambda: ActionChains(self.driver).key_down(Keys.CONTROL).send_keys("k").key_up(Keys.CONTROL).perform(),
-            lambda: ActionChains(self.driver).send_keys("/").perform(),
+    def _localizar_compositor_visivel(self):
+        seletores = [
+            "div#main footer div[contenteditable='true'][role='textbox']",
+            "div#main footer div[aria-label='Digite uma mensagem'][contenteditable='true']",
+            "div#main footer div[aria-label='Type a message'][contenteditable='true']",
         ]
-        for tentativa in tentativas:
+        for seletor in seletores:
             try:
-                tentativa()
-                focado = self._elemento_focado_editavel()
-                if focado:
-                    return
+                for elemento in self.driver.find_elements(By.CSS_SELECTOR, seletor):
+                    if self._eh_campo_composicao(elemento):
+                        return elemento
             except WebDriverException:
                 continue
+        return None
 
-    def _encontrar_campo_pesquisa(self):
-        """Localiza a busca lateral do WhatsApp Web com fallback por atalhos e JS.
+    def _fechar_sobreposicoes(self) -> None:
+        seletor = "div[role='dialog'], div[data-animate-modal-popup='true'], div[role='menu']"
+        for _tentativa in range(3):
+            try:
+                abertos = [
+                    elemento
+                    for elemento in self.driver.find_elements(By.CSS_SELECTOR, seletor)
+                    if elemento.is_displayed()
+                ]
+            except WebDriverException:
+                return
+            if not abertos:
+                return
+            try:
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            except WebDriverException:
+                return
+            time.sleep(0.1)
 
-        O erro anterior ocorria porque o WhatsApp mudou data-tab/aria-label.
-        Esta versão não depende de um único seletor: tenta abrir a busca por atalho,
-        clica no botão de pesquisa quando existir e, por último, varre todos os
-        textboxes/contenteditable visíveis por JavaScript.
-        """
-        try:
-            if "web.whatsapp.com" not in (self.driver.current_url or ""):
-                self.driver.get(WHATSAPP_WEB_URL)
-        except WebDriverException:
-            self.driver.get(WHATSAPP_WEB_URL)
+    def resetar_estado_whatsapp(self) -> None:
+        logger.info("Restaurando estado conhecido do WhatsApp antes do proximo grupo.")
+        self._fechar_sobreposicoes()
 
-        seletores_css = [
-            "div[aria-label='Search input textbox'][contenteditable='true']",
-            "div[aria-label='Caixa de texto de pesquisa'][contenteditable='true']",
-            "div[aria-label*='Pesquisar'][contenteditable='true']",
-            "div[aria-label*='Search'][contenteditable='true']",
-            "div[aria-placeholder*='Pesquisar'][contenteditable='true']",
-            "div[aria-placeholder*='Search'][contenteditable='true']",
+        compositor = self._localizar_compositor_visivel()
+        if compositor is not None:
+            self.clear_message_composer(compositor)
+
+        pesquisa = self._localizar_campo_pesquisa_aberto()
+        if pesquisa is not None:
+            self.clear_conversation_search(pesquisa)
+            try:
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            except WebDriverException:
+                pass
+
+        self._fechar_sobreposicoes()
+        logger.info("Estado do WhatsApp restaurado.")
+
+    def _localizar_campo_pesquisa_aberto(self):
+        seletores = [
+            "div#side div[aria-label='Search input textbox'][contenteditable='true']",
+            "div#side div[aria-label='Caixa de texto de pesquisa'][contenteditable='true']",
+            "div#side div[aria-label*='Pesquisar'][contenteditable='true']",
+            "div#side div[aria-label*='Search'][contenteditable='true']",
+            "div#side div[aria-placeholder*='Pesquisar'][contenteditable='true']",
+            "div#side div[aria-placeholder*='Search'][contenteditable='true']",
             "div#side div[role='textbox'][contenteditable='true']",
-            "div#side div[contenteditable='true']",
-            "div[role='textbox'][contenteditable='true']",
         ]
-        xpaths = [
-            "//div[@id='side']//div[@contenteditable='true' and @role='textbox']",
-            "//div[@id='side']//div[@contenteditable='true']",
-            "//div[@contenteditable='true' and contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'search')]",
-            "//div[@contenteditable='true' and contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÂÊÔÃÕÇ', 'abcdefghijklmnopqrstuvwxyzáéíóúâêôãõç'), 'pesquis')]",
-        ]
+        for seletor in seletores:
+            try:
+                for elemento in self.driver.find_elements(By.CSS_SELECTOR, seletor):
+                    if self._eh_campo_pesquisa(elemento):
+                        return elemento
+            except WebDriverException:
+                continue
+        return None
 
-        fim = time.monotonic() + float(getattr(settings, "group_search_wait_seconds", 1.5))
+    def _abrir_pesquisa_conversas(self):
+        tempo_maximo = max(
+            5.0,
+            float(getattr(settings, "group_search_wait_seconds", 5.0)),
+        )
+        fim = time.monotonic() + tempo_maximo
+        clicou_botao = False
         acionou_atalho = False
-        clicou_pesquisa = False
 
         while time.monotonic() < fim:
-            for seletor in seletores_css:
-                try:
-                    for elemento in self.driver.find_elements(By.CSS_SELECTOR, seletor):
-                        if elemento.is_displayed() and elemento.is_enabled():
-                            return elemento
-                except WebDriverException:
-                    continue
+            campo = self._localizar_campo_pesquisa_aberto()
+            if campo is not None:
+                logger.info("Pesquisa de conversas disponivel.")
+                return campo
 
-            for xpath in xpaths:
-                try:
-                    for elemento in self.driver.find_elements(By.XPATH, xpath):
-                        if elemento.is_displayed() and elemento.is_enabled():
-                            return elemento
-                except WebDriverException:
-                    continue
-
-            focado = self._elemento_focado_editavel()
-            if focado:
-                return focado
-
-            editaveis = self._buscar_editaveis_visiveis_por_js()
-            for elemento in editaveis:
-                try:
-                    if elemento.is_displayed() and elemento.is_enabled():
-                        return elemento
-                except WebDriverException:
-                    continue
-
-            if not clicou_pesquisa:
-                clicou_pesquisa = True
+            if not clicou_botao:
+                clicou_botao = True
                 self._clicar_possivel_botao_pesquisa()
+                continue
 
             if not acionou_atalho:
                 acionou_atalho = True
-                self._acionar_atalho_pesquisa()
+                try:
+                    ActionChains(self.driver).key_down(Keys.CONTROL).send_keys("k").key_up(Keys.CONTROL).perform()
+                except WebDriverException:
+                    pass
 
-            time.sleep(0.5)
-
-        try:
-            self.driver.save_screenshot(str(BASE_DIR / "erro_campo_pesquisa_whatsapp.png"))
-            logger.error("Screenshot salvo em erro_campo_pesquisa_whatsapp.png")
-        except WebDriverException:
-            pass
+            time.sleep(0.2)
 
         raise TimeoutException(
-            "Campo de pesquisa do WhatsApp não foi encontrado. "
-            "Confirme se o WhatsApp Web está logado, se não há tela de atualização/QR Code "
-            "e se a lista de conversas aparece no painel esquerdo."
+            "Campo de pesquisa de conversas do WhatsApp nao foi encontrado no painel lateral."
         )
 
-    def _limpar_e_digitar_pesquisa(self, campo_pesquisa, termo: str) -> None:
-        campo_pesquisa.click()
-        try:
-            WebDriverWait(self.driver, 2, poll_frequency=0.2).until(lambda _: campo_pesquisa.is_displayed() and campo_pesquisa.is_enabled())
-        except TimeoutException:
-            pass
-        try:
-            campo_pesquisa.send_keys(Keys.CONTROL, "a")
-            campo_pesquisa.send_keys(Keys.BACKSPACE)
-        except WebDriverException:
-            pass
+    def clear_conversation_search(self, campo_pesquisa=None) -> None:
+        campo = campo_pesquisa or self._localizar_campo_pesquisa_aberto()
+        if campo is None:
+            return
+        if not self._eh_campo_pesquisa(campo):
+            raise TimeoutException("Elemento selecionado nao e a pesquisa de conversas.")
+        self._limpar_editavel(campo, "Pesquisa de conversas")
+        logger.info("Pesquisa anterior limpa.")
 
-        try:
-            self.driver.execute_script(
-                """
-                const el = arguments[0];
-                const text = arguments[1];
-                el.focus();
-                document.execCommand('selectAll', false, null);
-                document.execCommand('delete', false, null);
-                document.execCommand('insertText', false, text);
-                el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: text}));
-                """,
-                campo_pesquisa,
-                termo,
-            )
-        except WebDriverException:
-            campo_pesquisa.send_keys(termo)
+    def clear_message_composer(self, caixa=None) -> None:
+        campo = caixa or self._localizar_compositor_visivel()
+        if campo is None:
+            return
+        if not self._eh_campo_composicao(campo):
+            raise TimeoutException("Elemento selecionado nao e o campo de mensagem.")
+        tinha_rascunho = bool(self._texto_editavel(campo))
+        self._limpar_editavel(campo, "Campo de mensagem")
+        if tinha_rascunho:
+            logger.warning("Rascunho nao enviado removido com seguranca do campo de mensagem.")
+        logger.info("Campo de mensagem limpo e validado.")
+
+    def _limpar_e_digitar_pesquisa(self, campo_pesquisa, termo: str) -> None:
+        if not self._eh_campo_pesquisa(campo_pesquisa):
+            raise TimeoutException("Elemento selecionado nao e a pesquisa de conversas.")
+        self.clear_conversation_search(campo_pesquisa)
+        campo_pesquisa.click()
+        campo_pesquisa.send_keys(termo)
+        esperado = self._normalizar_nome_grupo_para_comparacao(termo)
+        WebDriverWait(
+            self.driver,
+            3,
+            poll_frequency=0.2,
+            ignored_exceptions=(WebDriverException,),
+        ).until(
+            lambda _driver: self._normalizar_nome_grupo_para_comparacao(
+                self._texto_editavel(campo_pesquisa)
+            ) == esperado,
+            "O termo nao foi inserido na pesquisa de conversas.",
+        )
 
     def _clicar_resultado_grupo_por_variantes(self, variantes: list[str]) -> bool:
-        alvos = {self._normalizar_nome_grupo_para_comparacao(valor) for valor in variantes if valor}
+        alvos = {
+            self._normalizar_nome_grupo_para_comparacao(valor)
+            for valor in variantes
+            if valor
+        }
         if not alvos:
             return False
 
         try:
-            spans = self.driver.find_elements(By.XPATH, "//span[@title]")
-            primeiro_resultado = None
-
+            spans = self.driver.find_elements(
+                By.XPATH,
+                "//div[@id='side']//span[@title]",
+            )
             for span in spans:
                 titulo = (span.get_attribute("title") or "").strip()
-                if not titulo:
+                if self._normalizar_nome_grupo_para_comparacao(titulo) not in alvos:
                     continue
-
                 try:
                     linha = span.find_element(
                         By.XPATH,
-                        "./ancestor::div[@role='row' or @tabindex='0' or contains(@class, 'x10l6tqk')][1]",
+                        "./ancestor::div[@role='row' or @role='listitem' or @tabindex='0'][1]",
                     )
                 except WebDriverException:
                     linha = span
-
-                if linha.is_displayed() and primeiro_resultado is None:
-                    primeiro_resultado = (linha, titulo)
-
-                titulo_normalizado = self._normalizar_nome_grupo_para_comparacao(titulo)
-                if titulo_normalizado in alvos and linha.is_displayed():
+                if linha.is_displayed() and linha.is_enabled():
                     linha.click()
-                    time.sleep(0.15)
-                    logger.info("Grupo encontrado e aberto. ref=%s", _identificador_tecnico(titulo))
+                    logger.info("Resultado exato selecionado. ref=%s", _identificador_tecnico(titulo))
                     return True
-
-            # Otimização: se a busca já filtrou resultados, abre o primeiro visível em vez de esperar vários fallbacks.
-            if primeiro_resultado is not None:
-                linha, titulo = primeiro_resultado
-                linha.click()
-                time.sleep(0.15)
-                logger.info("Primeiro resultado visível aberto após busca. ref=%s", _identificador_tecnico(titulo))
-                return True
         except WebDriverException:
             return False
-
         return False
 
     def _abrir_grupo_pelo_nome(self, nome_grupo: str, nome_grupo_busca: str | None = None) -> None:
         variantes = self._variantes_nome_grupo(nome_grupo, nome_grupo_busca)
-        logger.info("Pesquisando grupo do WhatsApp. ref=%s", _identificador_tecnico(nome_grupo))
+        logger.info("Pesquisa de grupo iniciada. ref=%s", _identificador_tecnico(nome_grupo))
+        ultimo_erro: BaseException | None = None
 
-        campo_pesquisa = self._encontrar_campo_pesquisa()
-
-        for termo in variantes:
-            logger.info("Tentando localizar grupo. ref=%s", _identificador_tecnico(termo))
-            self._limpar_e_digitar_pesquisa(campo_pesquisa, termo)
-            time.sleep(0.25)
-
-            if self._clicar_resultado_grupo_por_variantes(variantes):
-                return
-
-            nome_xpath = self._xpath_literal(termo)
-            candidatos_xpath = [
-                f"//span[@title={nome_xpath}]/ancestor::div[@role='row' or @tabindex='0'][1]",
-                f"//span[@title={nome_xpath}]",
-            ]
-
-            fim = time.monotonic() + float(getattr(settings, "group_search_wait_seconds", 1.5))
-            while time.monotonic() < fim:
-                for xpath in candidatos_xpath:
-                    try:
-                        elementos = self.driver.find_elements(By.XPATH, xpath)
-                        for elemento in elementos:
-                            if elemento.is_displayed():
-                                elemento.click()
-                                time.sleep(0.15)
-                                logger.info("Grupo encontrado e aberto. ref=%s", _identificador_tecnico(termo))
-                                return
-                    except WebDriverException:
-                        continue
-
-                try:
-                    if self._conversa_aberta_com_titulo(nome_grupo, nome_grupo_busca):
-                        logger.info("Grupo já estava aberto. ref=%s", _identificador_tecnico(nome_grupo))
-                        return
-                except WebDriverException:
-                    pass
-
-                time.sleep(0.3)
-
-            # Se a busca encontrou apenas um resultado, ENTER costuma abrir a conversa.
+        for tentativa, termo in enumerate(variantes, start=1):
+            logger.info(
+                "Tentativa de pesquisa %s/%s. ref=%s",
+                tentativa,
+                len(variantes),
+                _identificador_tecnico(nome_grupo),
+            )
             try:
-                ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-                time.sleep(0.15)
-                if self._conversa_aberta_com_titulo(nome_grupo, nome_grupo_busca):
-                    logger.info("Grupo aberto pela tecla ENTER. ref=%s", _identificador_tecnico(termo))
-                    return
-            except WebDriverException:
-                pass
+                self.resetar_estado_whatsapp()
+                campo_pesquisa = self._abrir_pesquisa_conversas()
+                self._limpar_e_digitar_pesquisa(campo_pesquisa, termo)
+                WebDriverWait(
+                    self.driver,
+                    max(5.0, float(getattr(settings, "group_search_wait_seconds", 5.0))),
+                    poll_frequency=0.25,
+                    ignored_exceptions=(WebDriverException,),
+                ).until(
+                    lambda _driver: self._clicar_resultado_grupo_por_variantes([nome_grupo]),
+                    "Resultado exato do grupo nao apareceu.",
+                )
+                self.validate_opened_group(nome_grupo)
+                pesquisa_aberta = self._localizar_campo_pesquisa_aberto()
+                if pesquisa_aberta is not None:
+                    self.clear_conversation_search(pesquisa_aberta)
+                logger.info("Grupo encontrado na pesquisa. ref=%s", _identificador_tecnico(nome_grupo))
+                return
+            except (TimeoutException, WebDriverException) as exc:
+                ultimo_erro = exc
+                logger.warning("Falha na tentativa de pesquisa %s. ref=%s", tentativa, _identificador_tecnico(nome_grupo))
 
+        self.resetar_estado_whatsapp()
         raise TimeoutException(
-            "Grupo do WhatsApp não encontrado. "
-            f"Referência técnica: {_identificador_tecnico(nome_grupo)}. "
-            "Confira se o grupo aparece na lista do WhatsApp Web desta conta."
-        )
+            "Grupo do WhatsApp nao encontrado com correspondencia exata."
+        ) from ultimo_erro
 
     def _conversa_aberta_com_titulo(self, nome_grupo: str, nome_grupo_busca: str | None = None) -> bool:
         alvos = {
             self._normalizar_nome_grupo_para_comparacao(valor)
-            for valor in self._variantes_nome_grupo(nome_grupo, nome_grupo_busca)
+            for valor in [nome_grupo]
             if valor
         }
         try:
-            titulos = self.driver.find_elements(By.XPATH, "//header//span[@title]")
+            titulos = self.driver.find_elements(By.XPATH, "//div[@id='main']//header//span[@title]")
             return any(
-                self._normalizar_nome_grupo_para_comparacao(elemento.get_attribute("title") or "") in alvos
+                elemento.is_displayed()
+                and self._normalizar_nome_grupo_para_comparacao(elemento.get_attribute("title") or "") in alvos
                 for elemento in titulos
             )
         except WebDriverException:
             return False
 
-    def enviar_mensagem_grupo(self, nome_grupo: str, mensagem: str, nome_grupo_busca: str | None = None) -> None:
+    def validate_opened_group(self, nome_grupo: str) -> None:
+        try:
+            WebDriverWait(
+                self.driver,
+                settings.conversation_wait_seconds,
+                poll_frequency=0.3,
+                ignored_exceptions=(WebDriverException,),
+            ).until(
+                lambda _driver: self._conversa_aberta_com_titulo(nome_grupo),
+                "O cabecalho da conversa nao corresponde ao grupo solicitado.",
+            )
+        except TimeoutException as exc:
+            raise TimeoutException(
+                "Grupo do WhatsApp nao encontrado ou cabecalho divergente."
+            ) from exc
+        logger.info("Grupo aberto e cabecalho validado. ref=%s", _identificador_tecnico(nome_grupo))
+
+    def _contar_mensagens_enviadas_iguais(self, mensagem: str) -> int:
+        try:
+            return int(
+                self.driver.execute_script(
+                    """
+                    const expected = String(arguments[0] || '').replace(/\r\n/g, '\n').trim();
+                    const bubbles = Array.from(document.querySelectorAll('#main div.message-out'));
+                    return bubbles.filter((bubble) => {
+                        const content = bubble.querySelector(
+                            "span.selectable-text, [data-testid='selectable-text']"
+                        );
+                        const text = String(
+                            content ? (content.innerText || content.textContent || '') : ''
+                        ).replace(/\r\n/g, '\n').trim();
+                        return text === expected;
+                    }).length;
+                    """,
+                    mensagem,
+                )
+                or 0
+            )
+        except (TypeError, ValueError, WebDriverException):
+            return 0
+
+    def _aguardar_confirmacao_envio(self, caixa, mensagem: str, quantidade_anterior: int) -> bool:
+        tempo_maximo = max(5.0, float(settings.after_send_wait_seconds))
+        try:
+            WebDriverWait(
+                self.driver,
+                tempo_maximo,
+                poll_frequency=0.25,
+                ignored_exceptions=(WebDriverException,),
+            ).until(
+                lambda _driver: (
+                    not self._texto_editavel(caixa)
+                    and self._contar_mensagens_enviadas_iguais(mensagem) > quantidade_anterior
+                ),
+                "A mensagem enviada nao apareceu na conversa.",
+            )
+            return True
+        except TimeoutException:
+            return False
+
+    def _disparar_envio(self, caixa) -> None:
+        if self._clicar_botao_enviar():
+            return
+        logger.info("Botao enviar indisponivel; usando ENTER no compositor validado.")
+        if not self._eh_campo_composicao(caixa):
+            raise TimeoutException("O compositor validado deixou de estar disponivel.")
+        caixa.click()
+        ActionChains(self.driver).send_keys(Keys.ENTER).perform()
+
+    def enviar_mensagem_grupo(
+        self,
+        nome_grupo: str,
+        mensagem: str,
+        nome_grupo_busca: str | None = None,
+        on_send_dispatched: Callable[[], None] | None = None,
+    ) -> bool:
         self.garantir_driver()
         nome_grupo = str(nome_grupo or "").strip()
         mensagem = str(mensagem or "").strip()
@@ -707,16 +857,32 @@ class WhatsAppService:
 
         self._abrir_grupo_pelo_nome(nome_grupo, nome_grupo_busca)
         caixa = self._aguardar_conversa_pronta()
+        self.clear_message_composer(caixa)
+        quantidade_anterior = self._contar_mensagens_enviadas_iguais(mensagem)
         self._preencher_caixa(caixa, mensagem)
+        WebDriverWait(self.driver, 3, poll_frequency=0.2).until(
+            lambda _driver: self._texto_editavel(caixa) == mensagem,
+            "A mensagem nao foi inserida integralmente no compositor.",
+        )
+        logger.info("Mensagem digitada no compositor validado. ref=%s", _identificador_tecnico(nome_grupo))
 
         logger.info("Enviando mensagem para grupo. ref=%s", _identificador_tecnico(nome_grupo))
-        if not self._clicar_botao_enviar():
-            logger.info("Botão enviar não encontrado. Tentando enviar com ENTER...")
-            caixa.click()
-            ActionChains(self.driver).send_keys(Keys.ENTER).perform()
-
-        time.sleep(settings.after_send_wait_seconds)
-        logger.info("Mensagem enviada para o grupo. ref=%s", _identificador_tecnico(nome_grupo))
+        self._disparar_envio(caixa)
+        if on_send_dispatched is not None:
+            on_send_dispatched()
+        confirmado = self._aguardar_confirmacao_envio(caixa, mensagem, quantidade_anterior)
+        if confirmado:
+            logger.info("Mensagem enviada e confirmada na conversa. ref=%s", _identificador_tecnico(nome_grupo))
+        else:
+            logger.warning(
+                "Envio disparado sem confirmacao visual; checkpoint mantido para impedir duplicidade. ref=%s",
+                _identificador_tecnico(nome_grupo),
+            )
+        try:
+            self.resetar_estado_whatsapp()
+        except (TimeoutException, WebDriverException):
+            logger.warning("Envio concluido, mas o reset final da interface falhou.")
+        return confirmado
 
     def enviar_mensagem(self, telefone: str, mensagem: str) -> None:
         self.garantir_driver()
@@ -728,6 +894,7 @@ class WhatsAppService:
         # Primeiro tenta URL com texto. Se o WhatsApp não preencher, o código digita manualmente.
         url = f"https://web.whatsapp.com/send?phone={telefone}&text={quote(mensagem)}&app_absent=0"
         self.driver.get(url)
+        self._minimizar_janela_controlada()
 
         caixa = self._aguardar_conversa_pronta()
 

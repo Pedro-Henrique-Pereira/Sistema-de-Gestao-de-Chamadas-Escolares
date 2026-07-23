@@ -12,6 +12,7 @@ const PUBLIC_ERROR_MESSAGES = Object.freeze({
   NO_PHONE: "Responsável sem telefone.",
   RECIPIENT_NOT_FOUND: "Destinatário não localizado no WhatsApp.",
   GROUP_NOT_FOUND: "Grupo não localizado no WhatsApp.",
+  GROUP_VALIDATION_FAILED: "O cabe\u00e7alho da conversa aberta n\u00e3o corresponde ao grupo solicitado.",
   TEMPORARY_ERROR: "Falha temporária durante o envio.",
   PERMANENT_ERROR: "Não foi possível concluir o envio.",
   LEASE_EXPIRED: "A conexão com a máquina foi interrompida durante o envio.",

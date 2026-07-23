@@ -25,6 +25,7 @@ validarConfiguracoesCriticas();
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const pool = require("./database/db");
 
 const authRoutes = require("./routes/auth.routes");
 const registrosRoutes = require("./routes/registros.routes");
@@ -40,6 +41,12 @@ const automationWorkerRoutes = require("./routes/automation-worker.routes");
 const { csrfProtection } = require("./middlewares/csrfMiddleware");
 const { securityHeaders } = require("./middlewares/securityHeaders");
 const { errorMiddleware, notFoundMiddleware } = require("./utils/errorHandler");
+const { health, ready } = require("./controllers/healthController");
+const {
+  obterOrigensPermitidas,
+  origemCorsPermitida,
+  obterTrustProxy,
+} = require("./config/runtimeConfig");
 const { iniciarRotinaLimpezaDiaria } = require("./services/limpezaDadosService");
 const { iniciarRotinaLimpezaAutomacao } = require("./services/limpezaAutomacaoService");
 const { iniciarRotinaLimpezaAuditoria } = require("./services/limpezaAuditoriaService");
@@ -48,43 +55,17 @@ const app = express();
 app.disable("x-powered-by");
 
 if (process.env.NODE_ENV === "production") {
-  const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 1);
-  app.set("trust proxy", trustProxyHops);
+  app.set("trust proxy", obterTrustProxy());
 }
 
-const FRONTEND_URL = process.env.FRONTEND_URL
-  || (process.env.NODE_ENV === "production" ? "" : "http://192.168.0.13:5173");
-
-const FRONTEND_URLS_EXTRAS = String(process.env.FRONTEND_URLS_EXTRAS || "")
-  .split(",")
-  .map((url) => url.trim())
-  .filter(Boolean);
-
-const origensPermitidas = new Set([
-  FRONTEND_URL,
-  "https://www.lysimaco.com.br",
-  "https://lysimaco.com.br",
-  "https://sistema-de-gestao-de-chamadas-escol.vercel.app",
-  ...FRONTEND_URLS_EXTRAS,
-  ...(process.env.NODE_ENV === "production"
-    ? []
-    : [
-        "http://localhost:5173",
-        "http://localhost:4173",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:4173",
-      ]),
-].filter(Boolean));
+const origensPermitidas = obterOrigensPermitidas();
 
 app.use(securityHeaders);
 
 app.use(
   cors({
     origin(origin, callback) {
-      if (
-        !origin ||
-        origensPermitidas.has(origin)
-      ) {
+      if (origemCorsPermitida(origin, origensPermitidas)) {
         return callback(null, true);
       }
 
@@ -101,6 +82,8 @@ app.use(
 
 app.use(express.json({ limit: "512kb", type: "application/json" }));
 app.use(cookieParser());
+app.get("/api/health", health);
+app.get("/api/ready", ready);
 // Integração servidor-a-servidor: token Bearer dedicado, sem cookies de usuário.
 // A rota é montada antes do CSRF porque não usa autenticação baseada em navegador.
 app.use("/api/automation-worker", automationWorkerRoutes);
@@ -130,7 +113,7 @@ app.use(errorMiddleware);
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.BIND_HOST || "0.0.0.0";
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   if (process.env.DISABLE_DAILY_CLEANUP !== "true") {
     iniciarRotinaLimpezaDiaria();
   }
@@ -143,3 +126,33 @@ app.listen(PORT, HOST, () => {
     iniciarRotinaLimpezaAuditoria();
   }
 });
+
+let encerramentoIniciado = false;
+
+function encerrarComSeguranca(signal) {
+  if (encerramentoIniciado) return;
+  encerramentoIniciado = true;
+
+  const limite = setTimeout(() => {
+    console.error(`Encerramento forcado apos timeout. signal=${signal}`);
+    process.exit(1);
+  }, 10000);
+  limite.unref();
+
+  server.close(async (serverError) => {
+    let exitCode = serverError ? 1 : 0;
+
+    try {
+      await pool.end();
+    } catch {
+      exitCode = 1;
+      console.error("Falha ao fechar o pool MySQL durante o encerramento.");
+    } finally {
+      clearTimeout(limite);
+      process.exit(exitCode);
+    }
+  });
+}
+
+process.once("SIGTERM", () => encerrarComSeguranca("SIGTERM"));
+process.once("SIGINT", () => encerrarComSeguranca("SIGINT"));

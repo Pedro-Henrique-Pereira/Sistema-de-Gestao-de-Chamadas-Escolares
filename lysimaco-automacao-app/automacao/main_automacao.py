@@ -19,7 +19,10 @@ from automacao.services.api_service import (
     codigo_erro_seguro,
     mascarar_telefone,
 )
-from automacao.services.whatsapp_service import WhatsAppService
+from automacao.services.whatsapp_service import (
+    WhatsAppReadinessTimeout,
+    WhatsAppService,
+)
 from automacao.support.error_ui import mostrar_erro_critico, mostrar_erro_simples
 
 LOG_DIR = BASE_DIR / "logs"
@@ -173,6 +176,7 @@ def processar_solicitacao(
                         entrega.nome_grupo or "",
                         entrega.mensagem,
                         nome_grupo_busca=entrega.nome_grupo_busca,
+                        on_send_dispatched=lambda entrega_id=entrega.id: receipt_journal.record(entrega_id, "enviado"),
                     )
                     receipt_journal.record(entrega.id, "enviado")
                 else:
@@ -190,6 +194,11 @@ def processar_solicitacao(
             except AutomationApiError:
                 raise
             except Exception as exc_envio:
+                if entrega.canal == "grupo":
+                    try:
+                        whatsapp_local.resetar_estado_whatsapp()
+                    except Exception:
+                        logger.warning("Nao foi possivel restaurar a interface apos a falha da entrega #%s.", entrega.id)
                 falhas += 1
                 logger.warning(
                     "Falha resumida na entrega #%s; code=%s. A API controlará a retentativa.",
@@ -401,7 +410,69 @@ def aguardar_com_parada(segundos: float, stop_event=None) -> bool:
     return bool(stop_event.wait(segundos))
 
 
-def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_callback: Callable[[str], None] | None = None, activity_callback: Callable[[str], None] | None = None) -> int:
+def _notificar_estado_whatsapp(
+    status_callback: Callable[[str], None] | None,
+    estado: str,
+) -> None:
+    if status_callback is None:
+        return
+    try:
+        status_callback(estado)
+    except Exception:
+        logger.warning("Nao foi possivel atualizar o estado visual do WhatsApp.")
+
+
+def garantir_whatsapp_pronto_antes_da_fila(
+    whatsapp: WhatsAppService | None,
+    status_callback: Callable[[str], None] | None = None,
+) -> WhatsAppService | None:
+    """Libera o claim somente depois da sessão real do WhatsApp estar pronta."""
+    if settings.dry_run:
+        return whatsapp
+
+    _notificar_estado_whatsapp(status_callback, "Abrindo WhatsApp.")
+    try:
+        if whatsapp is not None and not whatsapp.driver_esta_vivo():
+            logger.warning("Driver Selenium invalido antes da captura. Recriando sessao limpa.")
+            try:
+                whatsapp.fechar()
+            except Exception:
+                pass
+            whatsapp = None
+
+        if whatsapp is None:
+            whatsapp = WhatsAppService(status_callback=status_callback)
+
+        whatsapp.abrir_whatsapp()
+        return whatsapp
+    except WhatsAppReadinessTimeout:
+        raise
+    except Exception:
+        _notificar_estado_whatsapp(status_callback, "Falha ao abrir o WhatsApp.")
+        raise
+
+
+def capturar_tarefa_com_whatsapp_pronto(
+    api_client: AutomationApiClient,
+    whatsapp: WhatsAppService | None,
+    status_callback: Callable[[str], None] | None = None,
+) -> tuple[WhatsAppService | None, TarefaAutomacao | None]:
+    """Mantém a fila intocada enquanto o WhatsApp não estiver operacional."""
+    whatsapp = garantir_whatsapp_pronto_antes_da_fila(
+        whatsapp,
+        status_callback=status_callback,
+    )
+    api_client.heartbeat("online_available")
+    return whatsapp, api_client.capturar_tarefa()
+
+
+def main(
+    runtime_config: dict[str, Any] | None = None,
+    stop_event=None,
+    log_callback: Callable[[str], None] | None = None,
+    activity_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
+) -> int:
     global GUI_MODE
     GUI_MODE = log_callback is not None
     gui_handler = instalar_handler_gui(log_callback)
@@ -454,10 +525,10 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
             "API da automação autenticada para a máquina %s.",
             maquina_autenticada,
         )
-        heartbeat = api_client.heartbeat("online_available")
+        heartbeat = api_client.heartbeat("updating")
         logger.info(
             "Heartbeat registrado. estado=%s fila=%s versão=%s.",
-            heartbeat.get("machine", {}).get("state", "online_available"),
+            heartbeat.get("machine", {}).get("state", "updating"),
             heartbeat.get("machine", {}).get("queueDepth", 0),
             settings.app_version,
         )
@@ -495,7 +566,11 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
                         return 0
                     continue
 
-                solicitacao = api_client.capturar_tarefa()
+                whatsapp, solicitacao = capturar_tarefa_com_whatsapp_pronto(
+                    api_client,
+                    whatsapp,
+                    status_callback=status_callback,
+                )
                 if solicitacao:
                     logger.info("Tarefa #%s capturada para a máquina %s.", solicitacao.id, settings.numero_maquina)
                     api_client.heartbeat(
@@ -507,24 +582,6 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
                             activity_callback(f"Tarefa capturada #{solicitacao.id}")
                         except Exception:
                             pass
-                    if (
-                        solicitacao.entregas
-                        and not settings.dry_run
-                        and (whatsapp is None or not whatsapp.driver_esta_vivo())
-                    ):
-                        if whatsapp is not None:
-                            logger.warning("Driver Selenium inválido antes de processar tarefa. Recriando sessão limpa.")
-                            try:
-                                whatsapp.fechar()
-                            except Exception:
-                                pass
-                        whatsapp = WhatsAppService()
-                        whatsapp.abrir_whatsapp()
-                        pausa_inicial = float(getattr(settings, "initial_load_delay_seconds", 0) or 0)
-                        if pausa_inicial > 0:
-                            logger.info("Pausa inicial configurada registrada: %ss. WhatsApp já validado; aplicando espera técnica máxima de 1s.", pausa_inicial)
-                            aguardar_com_parada(min(pausa_inicial, 1), stop_event)
-
                     while solicitacao:
                         tipo_solicitacao_atual = solicitacao.tipo
                         tarefa_sem_falhas = processar_solicitacao(
@@ -550,7 +607,11 @@ def main(runtime_config: dict[str, Any] | None = None, stop_event=None, log_call
                             logger.warning("Checkpoint pendente detectado; captura pausada.")
                             break
 
-                        solicitacao = api_client.capturar_tarefa()
+                        whatsapp, solicitacao = capturar_tarefa_com_whatsapp_pronto(
+                            api_client,
+                            whatsapp,
+                            status_callback=status_callback,
+                        )
                         if solicitacao and activity_callback is not None:
                             try:
                                 activity_callback(f"Tarefa capturada #{solicitacao.id}")
@@ -632,6 +693,7 @@ def run_from_gui(
     stop_event,
     log_callback: Callable[[str], None],
     activity_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
 ) -> int:
     """Ponto de entrada usado pela interface CustomTkinter."""
     return main(
@@ -639,6 +701,7 @@ def run_from_gui(
         stop_event=stop_event,
         log_callback=log_callback,
         activity_callback=activity_callback,
+        status_callback=status_callback,
     )
 
 

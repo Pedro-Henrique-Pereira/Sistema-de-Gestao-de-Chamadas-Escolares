@@ -6,6 +6,7 @@ from automacao.services.api_service import (
     AutomationApiClient,
     AutomationApiError,
     ReceiptJournal,
+    codigo_erro_seguro,
     mascarar_telefone,
 )
 
@@ -163,6 +164,10 @@ class ApiServiceTests(unittest.TestCase):
     def test_logs_mask_phone(self):
         self.assertEqual(mascarar_telefone("5544999135827"), "55*******27")
         self.assertNotIn("999135827", mascarar_telefone("5544999135827"))
+
+    def test_group_header_mismatch_has_specific_safe_code(self):
+        error = RuntimeError("Grupo aberto com cabecalho divergente.")
+        self.assertEqual(codigo_erro_seguro(error), "GROUP_VALIDATION_FAILED")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ const {
   formatDateBR,
   normalizePhone,
   publicTaskStatus,
+  publicErrorMessage,
   renderAttendanceMessage,
 } = require("../services/automationDomain");
 const {
@@ -85,6 +86,9 @@ test("permissões de máquina e estados públicos seguem o contrato V2", () => {
   assert.equal(publicTaskStatus({ status: "concluido_parcial" }), "completed_partially");
   assert.equal(publicTaskStatus({ status: "erro" }), "completed_with_failures");
   assert.equal(publicTaskStatus({ status: "cancelado" }), "cancelled");
+  assert.match(
+    publicErrorMessage("GROUP_VALIDATION_FAILED"), /grupo solicitado/
+  );
 });
 
 test("migration V2 persiste máquinas, eventos, idempotência e estados finais", () => {

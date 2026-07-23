@@ -12,6 +12,11 @@ const { publicErrorMessage } = require("../services/automationDomain");
 const { requisicaoVeioDeLocalhost } = require("../utils/devAccess");
 const { tokensCoincidem } = require("../middlewares/csrfMiddleware");
 const { securityHeaders } = require("../middlewares/securityHeaders");
+const {
+  obterOrigensPermitidas,
+  origemCorsPermitida,
+} = require("../config/runtimeConfig");
+const { criarReadyHandler } = require("../controllers/healthController");
 
 test("cookie de autenticacao fica inacessivel ao JavaScript", () => {
   const ambienteAnterior = process.env.NODE_ENV;
@@ -22,7 +27,7 @@ test("cookie de autenticacao fica inacessivel ao JavaScript", () => {
 
   assert.equal(token.httpOnly, true);
   assert.equal(token.secure, true);
-  assert.equal(token.sameSite, "none");
+  assert.equal(token.sameSite, "lax");
   assert.equal(token.path, "/");
   assert.equal(token.domain, undefined);
   assert.equal(csrf.httpOnly, false);
@@ -30,6 +35,40 @@ test("cookie de autenticacao fica inacessivel ao JavaScript", () => {
 
   if (ambienteAnterior === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = ambienteAnterior;
+});
+
+test("CORS de producao aceita somente a allowlist configurada", () => {
+  const origens = obterOrigensPermitidas({
+    NODE_ENV: "production",
+    ALLOWED_ORIGINS: "https://lysimaco.com.br,https://www.lysimaco.com.br",
+  });
+
+  assert.equal(origemCorsPermitida("https://lysimaco.com.br", origens), true);
+  assert.equal(origemCorsPermitida("https://www.lysimaco.com.br", origens), true);
+  assert.equal(origemCorsPermitida("https://externo.example", origens), false);
+  assert.equal(origemCorsPermitida(undefined, origens), true);
+});
+
+test("readiness responde sem expor o erro do banco", async () => {
+  const respostas = [];
+  const res = {
+    status(code) {
+      respostas.push({ code });
+      return this;
+    },
+    json(payload) {
+      respostas[respostas.length - 1].payload = payload;
+      return this;
+    },
+  };
+
+  await criarReadyHandler({ query: async () => [[{ ok: 1 }]] })({}, res);
+  await criarReadyHandler({ query: async () => { throw new Error("segredo"); } })({}, res);
+
+  assert.deepEqual(respostas, [
+    { code: 200, payload: { status: "ready" } },
+    { code: 503, payload: { status: "unavailable" } },
+  ]);
 });
 
 test("DTO publico de usuario nunca inclui hash, senha ou token", () => {

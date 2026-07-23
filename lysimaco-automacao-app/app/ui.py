@@ -994,6 +994,10 @@ class LysimacoAutomacaoApp(ctk.CTk):
                 stop_event=self.stop_event,
                 log_callback=self.log_from_thread,
                 activity_callback=self.mark_activity,
+                status_callback=lambda text: self.enqueue_gui_event(
+                    "status",
+                    {"target": "whatsapp", "text": text},
+                ),
             )
 
             if codigo_saida == 0:

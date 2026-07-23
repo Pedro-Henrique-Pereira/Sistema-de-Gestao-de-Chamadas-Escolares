@@ -496,3 +496,13 @@ Projeto desenvolvido para fins educacionais e institucionais.
 Todos os direitos reservados.
 
 **Pedro-Henrique-Pereira (PHtw) © 2026**
+
+---
+
+## Hospedagem atual de producao
+
+A infraestrutura alvo atual e um Ubuntu Server proprio da escola, com frontend,
+backend e MySQL em containers separados e acesso publico exclusivamente por
+Cloudflare Tunnel nos dominios `lysimaco.com.br` e `www.lysimaco.com.br`.
+Referencias anteriores a Railway/Vercel descrevem a hospedagem legada. A fonte
+de verdade operacional e `docs/HOSPEDAGEM_PRODUCAO.md`.

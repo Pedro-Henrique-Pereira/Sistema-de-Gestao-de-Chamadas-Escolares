@@ -1,6 +1,6 @@
 import { apiUrlSeguraEmProducao } from "../utils/apiUrlSecurity";
 
-const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const API_URL = String(import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 const METODOS_SEGUROS = new Set(["GET", "HEAD", "OPTIONS"]);
 const ENDPOINTS_SEM_NOTIFICACAO_GLOBAL_401 = new Set([
@@ -16,10 +16,6 @@ const ENDPOINTS_SEM_NOTIFICACAO_GLOBAL_401 = new Set([
 
 const MENSAGEM_SESSAO_EXPIRADA =
   "Sua sessão foi encerrada por segurança. Faça login novamente.";
-
-if (!API_URL) {
-  throw new Error("VITE_API_URL não configurada para o frontend.");
-}
 
 if (import.meta.env.PROD && !apiUrlSeguraEmProducao(API_URL)) {
   throw new Error("Em produção, VITE_API_URL deve usar HTTPS ou loopback local.");
@@ -68,7 +64,8 @@ function montarQueryString(params = {}) {
 function montarUrl(endpoint, params) {
   const caminho = normalizarEndpoint(endpoint);
   const queryString = montarQueryString(params);
-  return `${API_URL}${caminho}${queryString}`;
+  const base = API_URL.endsWith("/api") ? API_URL.slice(0, -4) : API_URL;
+  return `${base}${caminho}${queryString}`;
 }
 
 export class ApiError extends Error {

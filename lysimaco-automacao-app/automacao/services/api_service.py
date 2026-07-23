@@ -51,7 +51,9 @@ def codigo_erro_seguro(exc: BaseException) -> str:
     if isinstance(exc, AutomationApiError) and exc.status:
         return f"API_{exc.status}"
     texto = f"{type(exc).__name__} {exc}".lower()
-    if "grupo" in texto and ("não encontr" in texto or "nao encontr" in texto):
+    if "grupo" in texto and ("cabecalho" in texto or "cabe\u00e7alho" in texto):
+        return "GROUP_VALIDATION_FAILED"
+    if "grupo" in texto and ("n\u00e3o encontr" in texto or "nao encontr" in texto):
         return "GROUP_NOT_FOUND"
     if "destinat" in texto and ("não encontr" in texto or "nao encontr" in texto):
         return "RECIPIENT_NOT_FOUND"

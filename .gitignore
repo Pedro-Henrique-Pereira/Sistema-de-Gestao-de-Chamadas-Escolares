@@ -12,8 +12,10 @@ build/
 # variáveis de ambiente / segredos
 .env
 .env.*
+*.env
 !.env.example
 !.env.exemple
+!.env.production.example
 config.env
 backend/config.env
 frontend/.env
@@ -22,14 +24,22 @@ banco_dados.md
 .agents
 .codex
 .secrets/
+secrets/
+.ssh/
 .cloudflared/
 cloudflared/
 *-credentials.json
+deploy/cloudflare/config.yml
+deploy/cloudflare/*.json
+deploy/state/
 .npmrc
 *.pem
 *.key
 *.p12
 *.pfx
+*.crt
+*.cer
+*.der
 *.jks
 *.keystore
 id_rsa
@@ -86,6 +96,11 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+*.egg-info/
 lysimaco-automacao-app/runtime/*
 !lysimaco-automacao-app/runtime/.gitkeep
 !lysimaco-automacao-app/runtime/chromedriver/
