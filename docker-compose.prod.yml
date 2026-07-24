@@ -78,9 +78,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:2026.7.2
     restart: unless-stopped
-    command: tunnel --config /etc/cloudflared/config.yml --no-autoupdate run
-    volumes:
-      - ${CLOUDFLARE_CONFIG_DIR:-/opt/lysimaco/cloudflare}:/etc/cloudflared:ro
+    command: tunnel run
+    env_file:
+      - ${CLOUDFLARE_ENV_FILE:-/opt/lysimaco/env/cloudflared.env}
     depends_on:
       frontend:
         condition: service_healthy
